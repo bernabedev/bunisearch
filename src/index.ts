@@ -30,7 +30,16 @@ type SearchResult = {
   hits: SearchResultHit[];
   count: number;
   facets?: Record<string, Record<string, number>>;
-  elapsed: bigint;
+  elapsed: number;
+};
+
+type SerializableState = {
+  schema: Schema;
+  docCount: number;
+  documents: [string, Document][];
+  invertedIndex: [string, [string, number][]][];
+  facetIndex: [string, [any, string[]][]][];
+  numericIndex: [string, { value: number; docId: string }[]][];
 };
 
 export class BuniSearch {
@@ -131,6 +140,72 @@ export class BuniSearch {
     this.add(newDocData, docId);
 
     return true;
+  }
+
+  // =================================================================
+  // PERSISTENCE METHODS
+  // =================================================================
+
+  /**
+   * Saves the current state of the search index to a file.
+   * @param filePath The path where the index file will be saved.
+   */
+  async save(filePath: string): Promise<void> {
+    const serializableState: SerializableState = {
+      schema: this.schema,
+      docCount: this.docCount,
+      // Convert Maps and Sets to JSON-compatible Arrays
+      documents: Array.from(this.documents.entries()),
+      invertedIndex: Array.from(this.invertedIndex.entries()).map(
+        ([token, postings]) => [token, Array.from(postings.entries())],
+      ),
+      facetIndex: Array.from(this.facetIndex.entries()).map(
+        ([field, values]) => [
+          field,
+          Array.from(values.entries()).map(([value, idSet]) => [
+            value,
+            Array.from(idSet),
+          ]),
+        ],
+      ),
+      numericIndex: Array.from(this.numericIndex.entries()),
+    };
+
+    const jsonString = JSON.stringify(serializableState, null, 2); // Pretty-print for readability
+    await Bun.write(filePath, jsonString);
+  }
+
+  /**
+   * Creates a new BuniSearch instance by loading an index from a file.
+   * @param filePath The path of the index file to load.
+   * @returns A new, fully hydrated BuniSearch instance.
+   */
+  static async load(filePath: string): Promise<BuniSearch> {
+    const fileContent = await Bun.file(filePath).text();
+    const state: SerializableState = JSON.parse(fileContent);
+
+    // 1. Create a new instance with the loaded schema
+    const db = new BuniSearch({ schema: state.schema });
+
+    // 2. Hydrate the instance with the loaded data
+    db.docCount = state.docCount;
+    // Reconstruct Maps and Sets from the Arrays
+    db.documents = new Map(state.documents);
+    db.invertedIndex = new Map(
+      state.invertedIndex.map(([token, postings]) => [
+        token,
+        new Map(postings),
+      ]),
+    );
+    db.facetIndex = new Map(
+      state.facetIndex.map(([field, values]) => [
+        field,
+        new Map(values.map(([value, idArray]) => [value, new Set(idArray)])),
+      ]),
+    );
+    db.numericIndex = new Map(state.numericIndex);
+
+    return db;
   }
 
   // =================================================================
@@ -249,7 +324,7 @@ export class BuniSearch {
         hits: [],
         count: 0,
         facets: {},
-        elapsed: BigInt(elapsedMs),
+        elapsed: elapsedMs,
       };
     }
 
@@ -290,7 +365,7 @@ export class BuniSearch {
       return {
         hits: [],
         count: 0,
-        elapsed: BigInt(elapsedMs),
+        elapsed: elapsedMs,
       };
     }
 
@@ -322,7 +397,7 @@ export class BuniSearch {
       hits,
       count: sortedDocs.length,
       facets: facetResults,
-      elapsed: BigInt(elapsedMs),
+      elapsed: elapsedMs,
     };
   }
 
