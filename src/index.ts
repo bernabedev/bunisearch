@@ -54,10 +54,19 @@ export class BuniSearch {
   }
 
   /**
-   * Main method to insert a document. It orchestrates indexing across different structures.
+   * Adds a new document to the index.
+   * @param doc The document data to add.
+   * @param specifiedId Optional: An ID to use for the document. If not provided, a new UUID is generated.
+   * @returns The ID of the added document.
    */
-  public insert(doc: Record<string, any>): string {
-    const id = crypto.randomUUID();
+  public add(doc: Record<string, any>, specifiedId?: string): string {
+    const id = specifiedId || crypto.randomUUID();
+    if (this.documents.has(id)) {
+      throw new Error(
+        `Document with ID "${id}" already exists. Use update() instead.`,
+      );
+    }
+
     const document: Document = { ...doc, id };
     this.documents.set(id, document);
     this.docCount++;
@@ -67,10 +76,9 @@ export class BuniSearch {
       if (value === undefined || value === null) continue;
 
       const propSchema = this.schema[key];
-
       if (!propSchema) continue;
 
-      if (propSchema.type === "string") this._indexText(id, key, String(value));
+      if (propSchema.type === "string") this._indexText(id, String(value));
       if (propSchema.facetable) this._indexFacet(id, key, value);
       if (propSchema.type === "number" && propSchema.sortable)
         this._indexNumeric(id, key, value);
@@ -78,11 +86,58 @@ export class BuniSearch {
     return id;
   }
 
+  /**
+   * Deletes a document from the index by its ID.
+   * @param docId The ID of the document to delete.
+   * @returns `true` if the document was found and deleted, `false` otherwise.
+   */
+  public delete(docId: string): boolean {
+    const docToDelete = this.documents.get(docId);
+    if (!docToDelete) {
+      return false; // Document not found
+    }
+
+    // Un-index the document from all data structures
+    this._unindexText(docId, docToDelete);
+    this._unindexFacet(docId, docToDelete);
+    this._unindexNumeric(docId, docToDelete);
+
+    // Finally, remove the document itself
+    this.documents.delete(docId);
+    this.docCount--;
+
+    return true;
+  }
+
+  /**
+   * Updates an existing document. This is an atomic operation (delete + add).
+   * @param docId The ID of the document to update.
+   * @param partialDoc An object containing the fields to update.
+   * @returns `true` if the document was found and updated, `false` otherwise.
+   */
+  public update(docId: string, partialDoc: Record<string, any>): boolean {
+    const originalDoc = this.documents.get(docId);
+    if (!originalDoc) {
+      return false; // Document to update not found
+    }
+
+    // Perform the deletion of the old document state
+    this.delete(docId);
+
+    // Create the new document state by merging old and new data
+    const newDocData = { ...originalDoc, ...partialDoc };
+
+    // Add the new document state back with the same ID
+    this.add(newDocData, docId);
+
+    return true;
+  }
+
   // =================================================================
   // PRIVATE INDEXING METHODS (Correctly Implemented)
   // =================================================================
 
-  private _indexText(id: string, key: string, value: string) {
+  private _indexText(id: string, value: string) {
     const tokens = tokenize(value);
     const termFrequencies: Record<string, number> = {};
     for (const token of tokens) {
@@ -108,6 +163,69 @@ export class BuniSearch {
     sortedList.sort((a, b) => a.value - b.value);
   }
 
+  // --- Un-indexing (New Methods) ---
+  private _unindexText(docId: string, doc: Document) {
+    for (const key in this.schema) {
+      if (this.schema[key].type === "string" && doc[key]) {
+        const tokens = tokenize(String(doc[key]));
+        for (const token of tokens) {
+          const postings = this.invertedIndex.get(token);
+          if (postings) {
+            postings.delete(docId);
+            // Clean up: if no documents are associated with this token, remove the token itself
+            if (postings.size === 0) {
+              this.invertedIndex.delete(token);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private _unindexFacet(docId: string, doc: Document) {
+    for (const key in this.schema) {
+      if (
+        this.schema[key].facetable &&
+        doc[key] !== undefined &&
+        doc[key] !== null
+      ) {
+        const value = doc[key];
+        const valueMap = this.facetIndex.get(key);
+        if (valueMap) {
+          const idSet = valueMap.get(value);
+          if (idSet) {
+            idSet.delete(docId);
+            // Clean up: if no documents have this facet value, remove the value itself
+            if (idSet.size === 0) {
+              valueMap.delete(value);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private _unindexNumeric(docId: string, doc: Document) {
+    for (const key in this.schema) {
+      if (
+        this.schema[key].type === "number" &&
+        this.schema[key].sortable &&
+        doc[key] !== undefined &&
+        doc[key] !== null
+      ) {
+        const sortedList = this.numericIndex.get(key);
+        if (sortedList) {
+          const indexToRemove = sortedList.findIndex(
+            (item) => item.docId === docId,
+          );
+          if (indexToRemove > -1) {
+            sortedList.splice(indexToRemove, 1);
+          }
+        }
+      }
+    }
+  }
+
   // =================================================================
   // PUBLIC SEARCH METHOD & PRIVATE HELPERS
   // =================================================================
@@ -124,11 +242,14 @@ export class BuniSearch {
     // STAGE 1: FILTERING
     let allowedDocIds: Set<string> | null = this._applyFilters(filters);
     if (allowedDocIds && allowedDocIds.size === 0) {
+      const endTime = process.hrtime.bigint();
+      const elapsedNs = endTime - startTime;
+      const elapsedMs = Number(elapsedNs / 1000000n);
       return {
         hits: [],
         count: 0,
         facets: {},
-        elapsed: process.hrtime.bigint() - startTime,
+        elapsed: BigInt(elapsedMs),
       };
     }
 
@@ -163,10 +284,13 @@ export class BuniSearch {
     } else {
       // No search term and no filters. This case could return all documents, but let's return none.
       // A real-world app might have a different requirement here.
+      const endTime = process.hrtime.bigint();
+      const elapsedNs = endTime - startTime;
+      const elapsedMs = Number(elapsedNs / 1000000n);
       return {
         hits: [],
         count: 0,
-        elapsed: process.hrtime.bigint() - startTime,
+        elapsed: BigInt(elapsedMs),
       };
     }
 
@@ -190,11 +314,15 @@ export class BuniSearch {
         document: this.documents.get(docId)!,
       }));
 
+    const endTime = process.hrtime.bigint();
+    const elapsedNs = endTime - startTime;
+    const elapsedMs = Number(elapsedNs / 1000000n);
+
     return {
       hits,
       count: sortedDocs.length,
       facets: facetResults,
-      elapsed: process.hrtime.bigint() - startTime,
+      elapsed: BigInt(elapsedMs),
     };
   }
 

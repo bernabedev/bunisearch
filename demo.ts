@@ -56,7 +56,7 @@ const articles = [
   },
 ];
 
-articles.forEach((article) => db.insert(article));
+articles.forEach((article) => db.add(article));
 
 console.log(`✅ Index created with ${articles.length} documents.`);
 
