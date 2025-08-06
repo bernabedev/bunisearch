@@ -15,34 +15,44 @@ const db = new BuniSearch({
 // 2. Index multilingual data
 const articles = [
   {
-    title: "The incredible performance of Bun",
-    content: "Bun is an all-in-one JavaScript runtime.",
+    title: "Bun performance in 2023",
+    content: "Bun is fast.",
     author: "Anna",
     category: "JavaScript",
+    year: 2023,
+    published: true,
   },
   {
-    title: "TypeScript y Bun: La combinación perfecta",
-    content: "Usar TypeScript es fantástico.",
+    title: "TypeScript and Bun",
+    content: "A great combination.",
     author: "Juan",
     category: "JavaScript",
+    year: 2022,
+    published: true,
   },
   {
     title: "Search algorithm optimization",
-    content: "A good algorithm is key to performance.",
+    content: "Key to performance.",
     author: "Peter",
     category: "Algorithms",
+    year: 2023,
+    published: true,
   },
   {
-    title: "Introduction to fast full-text search",
-    content: "A fast search algorithm is crucial.",
+    title: "Intro to full-text search",
+    content: "A crucial algorithm.",
     author: "Anna",
     category: "Algorithms",
+    year: 2021,
+    published: false,
   },
   {
-    title: "Bun for server-side development",
-    content: "Bun can also build fast servers.",
+    title: "Bun for servers",
+    content: "Bun can build fast servers.",
     author: "Anna",
     category: "JavaScript",
+    year: 2023,
+    published: true,
   },
 ];
 
@@ -61,6 +71,18 @@ Bun.serve({
       const tolerance = Number(url.searchParams.get("tolerance") || 1);
       const facets = url.searchParams.get("facets")?.split(",") || [];
 
+      let filters = {};
+      const filtersParam = url.searchParams.get("filters");
+      if (filtersParam) {
+        try {
+          filters = JSON.parse(filtersParam);
+        } catch (e) {
+          return new Response("Invalid JSON in 'filters' parameter.", {
+            status: 400,
+          });
+        }
+      }
+
       if (!q) {
         return new Response("Missing search query parameter: ?q=term", {
           status: 400,
@@ -73,6 +95,7 @@ Bun.serve({
         tolerance: tolerance,
         limit: 5,
         facets,
+        filters,
       });
 
       // We convert bigint to a number for JSON serialization
