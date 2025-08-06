@@ -5,9 +5,10 @@ console.log("🚀 Initializing BuniSearch v2 Engine...");
 // 1. Create a new search instance with our schema
 const db = new BuniSearch({
   schema: {
-    title: "string",
-    content: "string",
-    author: "string",
+    title: { type: "string" },
+    content: { type: "string" },
+    author: { type: "string", facetable: true },
+    category: { type: "string", facetable: true },
   },
 });
 
@@ -15,24 +16,33 @@ const db = new BuniSearch({
 const articles = [
   {
     title: "The incredible performance of Bun",
-    content: "Bun is an all-in-one JavaScript runtime designed for speed.",
+    content: "Bun is an all-in-one JavaScript runtime.",
     author: "Anna",
+    category: "JavaScript",
   },
   {
     title: "TypeScript y Bun: La combinación perfecta",
-    content:
-      "Usar TypeScript con Bun es una experiencia de desarrollo fantástica.",
+    content: "Usar TypeScript es fantástico.",
     author: "Juan",
+    category: "JavaScript",
   },
   {
     title: "Search algorithm optimization",
-    content: "A good algorithm is key to the performance of any search engine.",
+    content: "A good algorithm is key to performance.",
     author: "Peter",
+    category: "Algorithms",
   },
   {
-    title: "Einführung in die schnelle Suche",
-    content: "Ein schneller Suchalgorithmus ist entscheidend.",
-    author: "Klaus",
+    title: "Introduction to fast full-text search",
+    content: "A fast search algorithm is crucial.",
+    author: "Anna",
+    category: "Algorithms",
+  },
+  {
+    title: "Bun for server-side development",
+    content: "Bun can also build fast servers.",
+    author: "Anna",
+    category: "JavaScript",
   },
 ];
 
@@ -49,6 +59,7 @@ Bun.serve({
     if (url.pathname === "/search") {
       const q = url.searchParams.get("q");
       const tolerance = Number(url.searchParams.get("tolerance") || 1);
+      const facets = url.searchParams.get("facets")?.split(",") || [];
 
       if (!q) {
         return new Response("Missing search query parameter: ?q=term", {
@@ -61,6 +72,7 @@ Bun.serve({
       const results = db.search(q, {
         tolerance: tolerance,
         limit: 5,
+        facets,
       });
 
       // We convert bigint to a number for JSON serialization

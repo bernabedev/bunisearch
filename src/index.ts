@@ -1,15 +1,25 @@
+// src/index.ts
 import { calculateLevenshtein } from "./utils/levenshtein";
 import { tokenize } from "./utils/tokenizer";
 
 // --- Type Definitions ---
 type Document = Record<string, any> & { id: string };
-type Schema = Record<string, "string" | "number" | "boolean">;
+
+// Schema now supports marking fields as facetable
+type SchemaProperty = {
+  type: "string" | "number" | "boolean";
+  facetable?: boolean;
+};
+type Schema = Record<string, SchemaProperty>;
+
 type InvertedIndex = Map<string, Map<string, number>>; // Map<token, Map<docId, termFrequency>>
+type FacetIndex = Map<string, Map<any, Set<string>>>; // Map<facetField, Map<facetValue, Set<docId>>>
 
 type SearchOptions = {
   properties?: "*" | string[];
-  tolerance?: number; // Levenshtein distance for fuzzy search
+  tolerance?: number;
   limit?: number;
+  facets?: string[]; // New: specify which facets to compute
 };
 
 type SearchResultHit = {
@@ -18,25 +28,33 @@ type SearchResultHit = {
   document: Document;
 };
 
+// Result now includes a 'facets' object
 type SearchResult = {
   hits: SearchResultHit[];
   count: number;
-  elapsed: bigint; // Time taken in nanoseconds
+  facets?: Record<string, Record<string, number>>; // e.g., { author: { Anna: 2, Juan: 1 } }
+  elapsed: bigint;
 };
 
 export class BuniSearch {
   private schema: Schema;
   private documents: Map<string, Document> = new Map();
   private invertedIndex: InvertedIndex = new Map();
+  private facetIndex: FacetIndex = new Map(); // New index for facets
   private docCount = 0;
 
   constructor({ schema }: { schema: Schema }) {
     this.schema = schema;
+    // Pre-initialize maps for facetable fields
+    for (const key in schema) {
+      if (schema[key].facetable) {
+        this.facetIndex.set(key, new Map());
+      }
+    }
   }
 
   /**
-   * Inserts a document into the search index.
-   * @param doc The document to index. Must match the defined schema.
+   * Inserts a document, populating both the full-text and facet indexes.
    */
   public insert(doc: Record<string, any>): string {
     const id = crypto.randomUUID();
@@ -45,69 +63,57 @@ export class BuniSearch {
     this.docCount++;
 
     for (const key in this.schema) {
-      if (this.schema[key] === "string" && document[key]) {
-        const tokens = tokenize(document[key]);
+      const value = document[key];
+      if (value === undefined || value === null) continue;
+
+      // 1. Populate the full-text index (same as before)
+      if (this.schema[key].type === "string") {
+        const tokens = tokenize(String(value));
         const termFrequencies: Record<string, number> = {};
         for (const token of tokens) {
           termFrequencies[token] = (termFrequencies[token] || 0) + 1;
         }
-
         for (const token in termFrequencies) {
-          if (!this.invertedIndex.has(token)) {
+          if (!this.invertedIndex.has(token))
             this.invertedIndex.set(token, new Map());
-          }
           this.invertedIndex.get(token)!.set(id, termFrequencies[token]);
         }
+      }
+
+      // 2. Populate the facet index
+      if (this.schema[key].facetable) {
+        const valueMap = this.facetIndex.get(key)!;
+        if (!valueMap.has(value)) valueMap.set(value, new Set());
+        valueMap.get(value)!.add(id);
       }
     }
     return id;
   }
 
   /**
-   * Searches the index for a given term.
-   * @param term The search query.
-   * @param options Search options like tolerance, limit, etc.
-   * @returns A search result object with hits, count, and elapsed time.
+   * Searches the index and optionally computes facet counts for the results.
    */
   public search(term: string, options: SearchOptions = {}): SearchResult {
     const startTime = process.hrtime.bigint();
-    const { tolerance = 0, limit = 10 } = options;
+    const { tolerance = 0, limit = 10, facets: requestedFacets = [] } = options;
 
+    // --- Step 1: Full-text search to get matching documents (same as before) ---
     const queryTokens = tokenize(term);
-    const scores: Map<string, { score: number; termMatches: Set<string> }> =
-      new Map();
+    const scores: Map<string, number> = new Map();
 
     for (const queryToken of queryTokens) {
-      // Find exact or fuzzy matches for the query token in our index
-      const matchingTokens = this.findMatchingTokens(queryToken, tolerance);
-
+      const matchingTokens = this._findMatchingTokens(queryToken, tolerance);
       for (const { token: indexToken, distance } of matchingTokens) {
         const postings = this.invertedIndex.get(indexToken);
         if (!postings) continue;
-
-        // Calculate Inverse Document Frequency (IDF).
-        // Rarer terms get a higher score.
         const idf = Math.log(
           1 + (this.docCount - postings.size + 0.5) / (postings.size + 0.5),
         );
-
         for (const [docId, tf] of postings.entries()) {
-          // The relevance score is a product of TF and IDF.
-          // We apply a penalty for fuzzy matches based on their distance.
           const fuzzyPenalty =
             distance > 0 ? 1 - distance / queryToken.length : 1;
-          const score = tf * idf * fuzzyPenalty;
-
-          if (!scores.has(docId)) {
-            scores.set(docId, { score: 0, termMatches: new Set() });
-          }
-          const currentDocScore = scores.get(docId)!;
-
-          // To avoid double-counting, only add score if this exact index term hasn't been processed for this doc yet.
-          if (!currentDocScore.termMatches.has(indexToken)) {
-            currentDocScore.score += score;
-            currentDocScore.termMatches.add(indexToken);
-          }
+          const scoreIncrement = tf * idf * fuzzyPenalty;
+          scores.set(docId, (scores.get(docId) || 0) + scoreIncrement);
         }
       }
     }
@@ -116,9 +122,17 @@ export class BuniSearch {
       ([, a], [, b]) => b.score - a.score,
     );
 
+    // --- Step 2: Calculate facets from the search results ---
+    const allMatchingDocIds = sortedDocs.map(([docId]) => docId);
+    const facetResults = this._calculateFacets(
+      allMatchingDocIds,
+      requestedFacets,
+    );
+
+    // --- Step 3: Format final response ---
     const hits: SearchResultHit[] = sortedDocs
       .slice(0, limit)
-      .map(([docId, { score }]) => ({
+      .map(([docId, score]) => ({
         id: docId,
         score,
         document: this.documents.get(docId)!,
@@ -128,25 +142,47 @@ export class BuniSearch {
 
     return {
       hits,
-      count: hits.length,
+      count: sortedDocs.length,
+      facets: facetResults,
       elapsed: endTime - startTime,
     };
   }
 
   /**
-   * Finds tokens in the index that match the query token, either exactly or within a given Levenshtein distance.
-   * NOTE: For large vocabularies, this linear scan is a performance bottleneck.
-   * Production engines use more advanced data structures like Tries or BK-Trees.
+   * Calculates facet counts for a given set of document IDs.
    */
-  private findMatchingTokens(
+  private _calculateFacets(
+    docIds: string[],
+    requestedFacets: string[],
+  ): Record<string, Record<string, number>> {
+    const results: Record<string, Record<string, number>> = {};
+    if (requestedFacets.length === 0) return results;
+
+    for (const facetField of requestedFacets) {
+      if (!this.facetIndex.has(facetField)) continue; // Skip if field is not facetable
+
+      const valueCounts: Record<string, number> = {};
+      for (const docId of docIds) {
+        const doc = this.documents.get(docId)!;
+        const value = doc[facetField];
+        if (value !== undefined && value !== null) {
+          valueCounts[value] = (valueCounts[value] || 0) + 1;
+        }
+      }
+      results[facetField] = valueCounts;
+    }
+
+    return results;
+  }
+
+  // Renamed to be a private method
+  private _findMatchingTokens(
     queryToken: string,
     tolerance: number,
   ): { token: string; distance: number }[] {
-    // An exact match is always preferred and is much faster.
     if (this.invertedIndex.has(queryToken)) {
       return [{ token: queryToken, distance: 0 }];
     }
-
     if (tolerance > 0) {
       const matches: { token: string; distance: number }[] = [];
       for (const indexToken of this.invertedIndex.keys()) {
@@ -157,7 +193,6 @@ export class BuniSearch {
       }
       return matches;
     }
-
     return [];
   }
 }
