@@ -23,7 +23,7 @@ async function initializeSearchEngine(): Promise<BuniSearchManager> {
 /**
  * Main function to set up and start the API server.
  */
-async function startApi() {
+async function startApi(port: number = 3000) {
   const manager = await initializeSearchEngine();
   const app = Bklar();
   const serverStartTime = Date.now();
@@ -57,6 +57,7 @@ async function startApi() {
       },
     },
   );
+  // --- Middleware Definitions ---
 
   /**
    * Middleware to automatically persist a collection's state to disk after a write operation.
@@ -310,7 +311,12 @@ async function startApi() {
   }).setup(app);
 
   // --- Start the Server ---
-  app.listen(3000);
+  const server = app.listen(port);
+  return { app, server };
 }
 
-startApi();
+if (import.meta.main) {
+  startApi(3000);
+}
+
+export { startApi };
