@@ -222,7 +222,7 @@ export class BuniSearch {
     for (const token in termFrequencies) {
       if (!this.invertedIndex.has(token))
         this.invertedIndex.set(token, new Map());
-      this.invertedIndex.get(token)!.set(id, termFrequencies[token]);
+      this.invertedIndex.get(token)!.set(id, termFrequencies[token] || 0);
     }
   }
 
@@ -241,7 +241,7 @@ export class BuniSearch {
   // --- Un-indexing (New Methods) ---
   private _unindexText(docId: string, doc: Document) {
     for (const key in this.schema) {
-      if (this.schema[key].type === "string" && doc[key]) {
+      if (this.schema[key]?.type === "string" && doc[key]) {
         const tokens = tokenize(String(doc[key]));
         for (const token of tokens) {
           const postings = this.invertedIndex.get(token);
@@ -260,7 +260,7 @@ export class BuniSearch {
   private _unindexFacet(docId: string, doc: Document) {
     for (const key in this.schema) {
       if (
-        this.schema[key].facetable &&
+        this.schema[key]?.facetable &&
         doc[key] !== undefined &&
         doc[key] !== null
       ) {
@@ -283,7 +283,7 @@ export class BuniSearch {
   private _unindexNumeric(docId: string, doc: Document) {
     for (const key in this.schema) {
       if (
-        this.schema[key].type === "number" &&
+        this.schema[key]?.type === "number" &&
         this.schema[key].sortable &&
         doc[key] !== undefined &&
         doc[key] !== null
@@ -370,7 +370,7 @@ export class BuniSearch {
     }
 
     const sortedDocs = Array.from(scores.entries()).sort(
-      ([, a], [, b]) => b.score - a.score,
+      ([, a], [, b]) => b - a,
     );
 
     // STAGE 3: FACETING
@@ -425,7 +425,7 @@ export class BuniSearch {
         intersection = currentIds;
       } else {
         intersection = new Set(
-          [...intersection].filter((id) => currentIds.has(id)),
+          [...intersection].filter((id: string) => currentIds.has(id)),
         );
       }
       if (intersection.size === 0) return intersection;
