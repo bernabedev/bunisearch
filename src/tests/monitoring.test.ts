@@ -6,7 +6,7 @@ describe("Monitoring Endpoints", () => {
   let server: Bun.Server;
 
   beforeAll(async () => {
-    const api = await startApi(3001);
+    const api = await startApi();
     server = api.server;
   });
 

@@ -1,4 +1,4 @@
-const BASE_URL = "http://localhost:3001";
+const BASE_URL = "http://localhost:3000";
 
 export const http = {
   async request(path: string, options: RequestInit = {}): Promise<Response> {

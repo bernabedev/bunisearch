@@ -304,7 +304,7 @@ async function startApi(port: number = 3000) {
     path: "/docs",
     openapi: {
       title: "BuniSearch Multi-Collection API",
-      version: "2.0.0",
+      version: "1.0.0",
       description:
         "A powerful, multi-tenant search API built with BuniSearch and bklar. Inspired by Algolia and Typesense.",
     },

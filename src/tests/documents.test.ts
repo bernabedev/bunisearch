@@ -29,7 +29,7 @@ describe("Documents API", () => {
   const collectionName = "e2e-products";
 
   beforeAll(async () => {
-    const api = await startApi(3001);
+    const api = await startApi();
     server = api.server;
     await cleanup();
   });
