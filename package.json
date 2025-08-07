@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "dev": "bun --watch api.ts",
-    "start": "bun run api.ts"
+    "start": "bun run api.ts",
+    "lint": "bunx oxlint"
   },
   "devDependencies": {
     "@types/bun": "latest"

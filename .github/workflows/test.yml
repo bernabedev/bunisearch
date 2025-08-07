@@ -1,0 +1,46 @@
+name: BuniSearch CI
+
+# Controls when the workflow will run.
+on:
+  # Triggers the workflow on push events but only for the "main" branch.
+  push:
+    branches: ["main"]
+
+  # Triggers the workflow on pull request events targeted at the "main" branch.
+  pull_request:
+    branches: ["main"]
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel.
+jobs:
+  # This workflow contains a single job called "test".
+  test:
+    # The type of runner that the job will run on.
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job.
+    steps:
+      # Step 1: Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Sets up the Bun runtime environment.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          # Use the latest version of Bun. You can also pin to a specific version, e.g., '1.0.0'.
+          bun-version: latest
+
+      # Step 3: Installs project dependencies.
+      # Using --frozen-lockfile is a best practice for CI to ensure deterministic builds
+      # by installing the exact versions specified in bun.lockb.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Step 4 (Optional but Recommended): Run the linter to check for code style issues.
+      - name: Run linter
+        run: bun run lint
+
+      # Step 5: Runs the test suite using Bun's built-in test runner.
+      # This command will execute all files ending in .test.ts.
+      - name: Run tests
+        run: bun test
