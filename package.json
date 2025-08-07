@@ -8,5 +8,10 @@
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@bklarjs/swagger": "^1.0.6",
+    "bklar": "^1.0.5",
+    "zod": "^4.0.15"
   }
 }
