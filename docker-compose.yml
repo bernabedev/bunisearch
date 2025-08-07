@@ -1,0 +1,11 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: buni:1.0.0
+    environment:
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
