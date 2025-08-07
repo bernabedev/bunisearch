@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="buni.svg" alt="BuniSearch Logo" width="150"/>
+  <img src="buni-light.svg" alt="BuniSearch Logo" width="150"/>
   <h1>BuniSearch 🐰🔍</h1>
   <p>
     <strong>A high-performance, multi-collection, full-text search engine built with Bun.</strong>
