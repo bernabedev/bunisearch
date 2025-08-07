@@ -2,6 +2,10 @@ import { swagger } from "@bklarjs/swagger";
 import { Bklar, type Middleware } from "bklar";
 import { BadRequestError, NotFoundError } from "bklar/errors";
 import { z } from "zod";
+import {
+  addDocumentQuerySchema,
+  searchBodySchema,
+} from "./src/api/zod-schemas";
 import { BuniSearchManager, createCollectionSchema } from "./src/manager";
 import { getApplicationStats } from "./src/utils/stats";
 
@@ -53,47 +57,6 @@ async function startApi() {
       },
     },
   );
-  // --- Zod Schemas for API Validation ---
-
-  const searchBodySchema = z.object({
-    q: z.string().optional().default("").describe("Full-text search query."),
-    tolerance: z
-      .number()
-      .int()
-      .min(0)
-      .max(5)
-      .optional()
-      .default(1)
-      .describe("Levenshtein distance for fuzzy search."),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .optional()
-      .default(20)
-      .describe("Number of results to return."),
-    facets: z
-      .array(z.string())
-      .optional()
-      .default([])
-      .describe("List of fields to compute facets for."),
-    filters: z
-      .record(z.string(), z.any())
-      .optional()
-      .describe(
-        'A JSON object for filtering results. e.g., `{"brand":"Essence","price":{"gte":50}}`',
-      ),
-  });
-
-  const addDocumentQuerySchema = z.object({
-    id: z
-      .string()
-      .optional()
-      .describe("A specific ID to assign to the new document."),
-  });
-
-  // --- Middleware Definitions ---
 
   /**
    * Middleware to automatically persist a collection's state to disk after a write operation.
