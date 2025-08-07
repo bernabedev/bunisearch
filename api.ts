@@ -3,6 +3,7 @@ import { Bklar, type Middleware } from "bklar";
 import { BadRequestError, NotFoundError } from "bklar/errors";
 import { z } from "zod";
 import { BuniSearchManager, createCollectionSchema } from "./src/manager";
+import { getApplicationStats } from "./src/utils/stats";
 
 /**
  * Initializes the BuniSearchManager and loads all existing collections from disk.
@@ -21,10 +22,37 @@ async function initializeSearchEngine(): Promise<BuniSearchManager> {
 async function startApi() {
   const manager = await initializeSearchEngine();
   const app = Bklar();
+  const serverStartTime = Date.now();
 
-  app.onError((ctx, error) => {
-    console.log(`Error ${error}`);
-  });
+  app.get(
+    "/health",
+    (ctx) => {
+      return ctx.json({ status: "ok", timestamp: new Date().toISOString() });
+    },
+    {
+      doc: {
+        summary: "Health Check",
+        tags: ["Monitoring"],
+        description:
+          "A simple endpoint to check if the API server is running and responsive.",
+      },
+    },
+  );
+  app.get(
+    "/stats",
+    (ctx) => {
+      const stats = getApplicationStats(manager, serverStartTime);
+      return ctx.json(stats);
+    },
+    {
+      doc: {
+        summary: "Application Statistics",
+        tags: ["Monitoring"],
+        description:
+          "Provides statistics about the application's resource consumption and the state of the search engine.",
+      },
+    },
+  );
   // --- Zod Schemas for API Validation ---
 
   const searchBodySchema = z.object({

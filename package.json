@@ -3,6 +3,10 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "dev": "bun --watch api.ts",
+    "start": "bun run api.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },

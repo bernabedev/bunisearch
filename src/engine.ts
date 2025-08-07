@@ -48,7 +48,7 @@ export class BuniSearch {
   private invertedIndex: InvertedIndex = new Map();
   private facetIndex: FacetIndex = new Map();
   private numericIndex: NumericIndex = new Map();
-  private docCount = 0;
+  public docCount = 0;
 
   constructor({ schema }: { schema: Schema }) {
     this.schema = schema;
