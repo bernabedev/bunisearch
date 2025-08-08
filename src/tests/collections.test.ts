@@ -6,8 +6,7 @@ import {
   expect,
   test,
 } from "bun:test";
-import { unlink } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, unlink } from "node:fs/promises";
 import { startApi } from "../../api";
 import { http } from "./http";
 const DATA_DIR = "./data";
@@ -15,14 +14,10 @@ const DATA_DIR = "./data";
 async function cleanup() {
   try {
     const files = await readdir(DATA_DIR);
-    for (const file of files) {
-      unlink(`${DATA_DIR}/${file}`, (error) => {
-        if (error) {
-          console.error(`Error deleting file ${file}: ${error}`);
-        }
-      });
-    }
-  } catch (e) {}
+    await Promise.all(files.map((file) => unlink(`${DATA_DIR}/${file}`)));
+  } catch (e) {
+    // Ignore errors (e.g., if the directory doesn't exist)
+  }
 }
 describe("Collections API", () => {
   let server: Bun.Server;

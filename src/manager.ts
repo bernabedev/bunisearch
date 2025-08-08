@@ -1,5 +1,5 @@
-import { mkdirSync, unlink } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { readdir, unlink } from "node:fs/promises";
 import { z } from "zod";
 import { BuniSearch } from "./engine";
 
@@ -95,11 +95,14 @@ export class BuniSearchManager {
     this.collections.delete(name);
     // Remove the file from disk
     const filePath = `${DATA_DIR}/${name}.index.json`;
-    unlink(filePath, (error) => {
-      if (error !== null && error.code !== "ENOENT") {
+    try {
+      await unlink(filePath);
+    } catch (error: any) {
+      // Ignore ENOENT (file not found) errors, but log others.
+      if (error.code !== "ENOENT") {
         console.error(`Could not delete index file for ${name}:`, error);
       }
-    });
+    }
 
     return true;
   }

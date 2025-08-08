@@ -1,5 +1,5 @@
-import { calculateLevenshtein } from "./utils/levenshtein";
 import { tokenize } from "./utils/tokenizer";
+import { Trie } from "./utils/trie";
 
 // --- Type Definitions ---
 type Document = Record<string, any> & { id: string };
@@ -49,6 +49,7 @@ export class BuniSearch {
   private schema: Schema;
   private documents: Map<string, Document> = new Map();
   private invertedIndex: InvertedIndex = new Map();
+  private vocabularyTrie: Trie = new Trie();
   private facetIndex: FacetIndex = new Map();
   private numericIndex: NumericIndex = new Map();
   public docCount = 0;
@@ -246,6 +247,12 @@ export class BuniSearch {
     );
     db.numericIndex = new Map(state.numericIndex);
 
+    // --- Trie Change: Rebuild the vocabulary trie from the loaded index ---
+    for (const token of db.invertedIndex.keys()) {
+      db.vocabularyTrie.insert(token);
+    }
+    // --- End of Trie Change ---
+
     return db;
   }
 
@@ -270,6 +277,7 @@ export class BuniSearch {
     for (const [token, positions] of tokenPositions.entries()) {
       if (!this.invertedIndex.has(token)) {
         this.invertedIndex.set(token, new Map());
+        this.vocabularyTrie.insert(token);
       }
       const postings = this.invertedIndex.get(token)!;
 
@@ -300,12 +308,14 @@ export class BuniSearch {
     for (const key in this.schema) {
       if (this.schema[key]?.type === "string" && doc[key]) {
         const tokens = tokenize(String(doc[key]));
-        for (const token of tokens) {
+        // Use a Set to process each unique token only once per field
+        for (const token of new Set(tokens)) {
           const postings = this.invertedIndex.get(token);
           if (postings) {
             postings.delete(docId);
             // Clean up: if no documents are associated with this token, remove the token itself
             if (postings.size === 0) {
+              this.vocabularyTrie.delete(token);
               this.invertedIndex.delete(token);
             }
           }
@@ -455,8 +465,7 @@ export class BuniSearch {
             if (!postings) continue;
 
             const idf = Math.log(
-              1 +
-                (this.docCount - postings.size + 0.5) / (postings.size + 0.5),
+              1 + (this.docCount - postings.size + 0.5) / (postings.size + 0.5),
             );
 
             for (const [docId, positions] of postings.entries()) {
@@ -577,19 +586,17 @@ export class BuniSearch {
     queryToken: string,
     tolerance: number,
   ): { token: string; distance: number }[] {
+    // First, check for an exact match, which is the most common and fastest case.
     if (this.invertedIndex.has(queryToken)) {
       return [{ token: queryToken, distance: 0 }];
     }
+
+    // If no exact match and tolerance is specified, use the Trie for fuzzy search.
     if (tolerance > 0) {
-      const matches: { token: string; distance: number }[] = [];
-      for (const indexToken of this.invertedIndex.keys()) {
-        const distance = calculateLevenshtein(queryToken, indexToken);
-        if (distance <= tolerance) {
-          matches.push({ token: indexToken, distance });
-        }
-      }
-      return matches;
+      return this.vocabularyTrie.searchFuzzy(queryToken, tolerance);
     }
+
+    // If no exact match and no tolerance, return no matches.
     return [];
   }
 

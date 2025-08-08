@@ -6,8 +6,7 @@ import {
   expect,
   test,
 } from "bun:test";
-import { unlink } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, unlink } from "node:fs/promises";
 import { startApi } from "../../api";
 import { http } from "./http";
 const DATA_DIR = "./data";
@@ -15,14 +14,10 @@ const DATA_DIR = "./data";
 async function cleanup() {
   try {
     const files = await readdir(DATA_DIR);
-    for (const file of files) {
-      unlink(`${DATA_DIR}/${file}`, (error) => {
-        if (error) {
-          console.error(`Error deleting file ${file}: ${error}`);
-        }
-      });
-    }
-  } catch (e) {}
+    await Promise.all(files.map((file) => unlink(`${DATA_DIR}/${file}`)));
+  } catch (e) {
+    // Ignore errors (e.g., if the directory doesn't exist)
+  }
 }
 describe("Documents API", () => {
   let server: Bun.Server;
@@ -40,7 +35,10 @@ describe("Documents API", () => {
 
   // Setup the collection once for the entire suite
   beforeEach(async () => {
-    await cleanup();
+    // Ensure the collection from a previous test run is gone from the server's memory and disk.
+    // We don't care about the response status, just that it's gone.
+    await http.delete(`/collections/${collectionName}`);
+
     const payload = {
       name: collectionName,
       schema: {
@@ -49,7 +47,9 @@ describe("Documents API", () => {
         price: { type: "number", sortable: true },
       },
     };
-    await http.post("/collections", payload);
+    // Create a fresh collection for this test.
+    const createRes = await http.post("/collections", payload);
+    expect(createRes.status).toBe(201);
   });
 
   const sampleDoc = { title: "Laptop Pro", brand: "TechCorp", price: 1200 };
@@ -154,5 +154,27 @@ describe("Documents API", () => {
     };
     // This should match both documents
     expect(termBody.count).toBe(2);
+  });
+
+  test("POST /search - should find documents with fuzzy search (tolerance)", async () => {
+    // 1. Index a document
+    await http.post(`/collections/${collectionName}/docs`, {
+      title: "The new Apple Laptop is great",
+      brand: "Apple",
+      price: 2500,
+    });
+
+    // 2. Perform a fuzzy search for "laptob" with tolerance: 1
+    const searchPayload = { q: "laptob", tolerance: 1 };
+    const searchRes = await http.post(
+      `/collections/${collectionName}/search`,
+      searchPayload,
+    );
+    expect(searchRes.status).toBe(200);
+    const body = (await searchRes.json()) as { count: number; hits: any[] };
+
+    // Should find the document containing "laptop"
+    expect(body.count).toBe(1);
+    expect(body.hits[0].document.title).toBe("The new Apple Laptop is great");
   });
 });
