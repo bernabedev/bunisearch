@@ -175,4 +175,51 @@ describe("Documents API", () => {
     // Ensure 'id' is always returned
     expect(doc.id).toBeString();
   });
+
+  test("POST /search - should handle cursor-based pagination", async () => {
+    // 1. Index 25 documents
+    for (let i = 1; i <= 25; i++) {
+      await http.post(`/collections/${collectionName}/docs`, {
+        title: `Product ${i}`,
+        brand: "TestBrand",
+        price: i * 10,
+      });
+    }
+
+    // 2. First page
+    const page1Res = await http.post(`/collections/${collectionName}/search`, {
+      q: "product",
+      limit: 10,
+    });
+    expect(page1Res.status).toBe(200);
+    const page1Body = (await page1Res.json()) as any;
+    expect(page1Body.hits.length).toBe(10);
+    expect(page1Body.hasNextPage).toBe(true);
+    expect(page1Body.nextCursor).toBeString();
+    expect(page1Body.count).toBe(25);
+
+    // 3. Second page
+    const page2Res = await http.post(`/collections/${collectionName}/search`, {
+      q: "product",
+      limit: 10,
+      after: page1Body.nextCursor,
+    });
+    expect(page2Res.status).toBe(200);
+    const page2Body = (await page2Res.json()) as any;
+    expect(page2Body.hits.length).toBe(10);
+    expect(page2Body.hasNextPage).toBe(true);
+    expect(page2Body.nextCursor).toBeString();
+
+    // 4. Third (last) page
+    const page3Res = await http.post(`/collections/${collectionName}/search`, {
+      q: "product",
+      limit: 10,
+      after: page2Body.nextCursor,
+    });
+    expect(page3Res.status).toBe(200);
+    const page3Body = (await page3Res.json()) as any;
+    expect(page3Body.hits.length).toBe(5);
+    expect(page3Body.hasNextPage).toBe(false);
+    expect(page3Body.nextCursor).toBeUndefined();
+  });
 });

@@ -181,7 +181,7 @@ async function startApi(port: number = 3000) {
             summary: "Search within a collection",
             tags: ["Documents"],
             description:
-              "Performs a full-featured search on the documents within a specific collection. You can use the `fields` property to limit the returned document fields.",
+              "Performs a full-featured search on the documents within a specific collection. Supports cursor-based pagination using the `after` parameter. The response will include `hasNextPage` and `nextCursor` fields to facilitate fetching subsequent pages.",
           },
         },
       );

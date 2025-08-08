@@ -24,6 +24,7 @@ type SearchOptions = {
   facets?: string[];
   filters?: Filters;
   fields?: string[];
+  after?: string;
 };
 
 type SearchResultHit = { id: string; score: number; document: Document };
@@ -32,6 +33,8 @@ type SearchResult = {
   count: number;
   facets?: Record<string, Record<string, number>>;
   elapsed: number;
+  hasNextPage: boolean;
+  nextCursor?: string;
 };
 
 type SerializableState = {
@@ -371,6 +374,7 @@ export class BuniSearch {
       facets: requestedFacets = [],
       filters = {},
       fields,
+      after,
     } = options;
 
     // STAGE 1: FILTERING
@@ -492,7 +496,21 @@ export class BuniSearch {
       ([, a], [, b]) => b - a,
     );
 
-    // STAGE 3: FACETING
+    // STAGE 3: PAGINATION
+    let startIndex = 0;
+    if (after) {
+      const cursorIndex = sortedDocs.findIndex(([docId]) => docId === after);
+      if (cursorIndex > -1) {
+        startIndex = cursorIndex + 1;
+      }
+    }
+
+    const pageDocs = sortedDocs.slice(startIndex, startIndex + limit);
+    const hasNextPage = startIndex + limit < sortedDocs.length;
+    const nextCursor = hasNextPage ? pageDocs[pageDocs.length - 1]?.[0] : undefined;
+
+
+    // STAGE 4: FACETING
     const searchResultDocIds = sortedDocs.map(([docId]) => docId);
     const facetResults = this._calculateFacets(
       searchResultDocIds,
@@ -500,29 +518,27 @@ export class BuniSearch {
     );
 
     // Format final response
-    const hits: SearchResultHit[] = sortedDocs
-      .slice(0, limit)
-      .map(([docId, score]) => {
-        const fullDocument = this.documents.get(docId)!;
-        let document: Document;
+    const hits: SearchResultHit[] = pageDocs.map(([docId, score]) => {
+      const fullDocument = this.documents.get(docId)!;
+      let document: Document;
 
-        if (fields && fields.length > 0) {
-          document = { id: docId }; // Always include the id
-          for (const field of fields) {
-            if (fullDocument.hasOwnProperty(field)) {
-              document[field] = fullDocument[field];
-            }
+      if (fields && fields.length > 0) {
+        document = { id: docId }; // Always include the id
+        for (const field of fields) {
+          if (fullDocument.hasOwnProperty(field)) {
+            document[field] = fullDocument[field];
           }
-        } else {
-          document = fullDocument;
         }
+      } else {
+        document = fullDocument;
+      }
 
-        return {
-          id: docId,
-          score,
-          document,
-        };
-      });
+      return {
+        id: docId,
+        score,
+        document,
+      };
+    });
 
     const endTime = process.hrtime.bigint();
     const elapsedNs = endTime - startTime;
@@ -533,6 +549,8 @@ export class BuniSearch {
       count: sortedDocs.length,
       facets: facetResults,
       elapsed: elapsedMs,
+      hasNextPage,
+      nextCursor,
     };
   }
 

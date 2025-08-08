@@ -33,6 +33,10 @@ export const searchBodySchema = z.object({
     .array(z.string())
     .optional()
     .describe("A list of specific fields to return in the search results."),
+  after: z
+    .string()
+    .optional()
+    .describe("Cursor for pagination to fetch the next page of results."),
 });
 
 export const addDocumentQuerySchema = z.object({
