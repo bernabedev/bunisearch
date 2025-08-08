@@ -192,9 +192,9 @@ bun test
 
 BuniSearch is an active project. Here's what's planned for the future:
 
-- [ ] **Okapi BM25 Ranking:** Implement a more advanced relevance scoring algorithm.
-- [ ] **Trie-based Fuzzy Search:** Drastically improve fuzzy search performance.
-- [ ] **Phrase & Proximity Search:** Support for searching exact phrases like `"red laptop"`.
+- [x] **Okapi BM25 Ranking:** Implement a more advanced relevance scoring algorithm.
+- [x] **Trie-based Fuzzy Search:** Drastically improve fuzzy search performance.
+- [x] **Phrase & Proximity Search:** Support for searching exact phrases like `"red laptop"`.
 - [ ] **Asynchronous API:** Convert core operations to be fully non-blocking.
 - [ ] **FFI Optimizations:** Rewrite performance-critical sections (like Levenshtein) in Rust or Zig for native speed.
 - [ ] **Official Client Libraries:** Provide official client libraries for JavaScript/TypeScript.
