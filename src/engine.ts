@@ -423,7 +423,9 @@ export class BuniSearch {
             candidateDocIds = docIdsForToken;
           } else {
             candidateDocIds = new Set(
-              [...candidateDocIds].filter((id) => docIdsForToken.has(id)),
+              [...candidateDocIds].filter((id: string) =>
+                docIdsForToken.has(id),
+              ),
             );
           }
         }
@@ -636,10 +638,10 @@ export class BuniSearch {
     const currentTokenPositions = allPositions[tokenIndex];
     // Binary search for targetPosition in the sorted currentTokenPositions array.
     let low = 0;
-    let high = currentTokenPositions.length - 1;
+    let high = (currentTokenPositions?.length ?? 0) - 1;
     while (low <= high) {
       const mid = Math.floor((low + high) / 2);
-      const midVal = currentTokenPositions[mid];
+      const midVal = currentTokenPositions?.[mid] ?? 0;
       if (midVal === targetPosition) {
         // Found the next token in the sequence, recurse to find the rest.
         return this._findConsecutive(
