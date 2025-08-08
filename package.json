@@ -1,12 +1,38 @@
 {
-  "name": "search-engine",
-  "module": "index.ts",
+  "name": "bunisearch",
+  "version": "0.1.0",
+  "description": "A high-performance, multi-collection, full-text search engine built with Bun.",
+  "author": "Freilyn Bernabe freilyn@bernabe.dev https://bernabe.dev",
+  "license": "MIT",
+  "private": false,
   "type": "module",
-  "private": true,
+  "main": "api.ts",
+  "module": "api.ts",
   "scripts": {
     "dev": "bun --watch api.ts",
     "start": "bun run api.ts",
     "lint": "bunx oxlint"
+  },
+  "keywords": [
+    "bun",
+    "search-engine",
+    "full-text-search",
+    "typesense",
+    "algolia",
+    "typescript",
+    "bklar",
+    "fast"
+  ],
+  "homepage": "https://github.com/bernabedev/bunisearch#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bernabedev/bunisearch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bernabedev/bunisearch/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
   },
   "devDependencies": {
     "@types/bun": "latest"
