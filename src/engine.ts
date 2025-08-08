@@ -40,6 +40,9 @@ type SerializableState = {
   invertedIndex: [string, [string, number][]][];
   facetIndex: [string, [any, string[]][]][];
   numericIndex: [string, { value: number; docId: string }[]][];
+  // BM25-specific state
+  docLengths: [string, number][];
+  totalDocLength: number;
 };
 
 export class BuniSearch {
@@ -49,6 +52,14 @@ export class BuniSearch {
   private facetIndex: FacetIndex = new Map();
   private numericIndex: NumericIndex = new Map();
   public docCount = 0;
+
+  // BM25 parameters
+  private k1 = 1.5;
+  private b = 0.75;
+
+  // Document length tracking for BM25
+  private docLengths: Map<string, number> = new Map();
+  private totalDocLength = 0;
 
   constructor({ schema }: { schema: Schema }) {
     this.schema = schema;
@@ -80,6 +91,8 @@ export class BuniSearch {
     this.documents.set(id, document);
     this.docCount++;
 
+    let docLength = 0; // Initialize length for the current document
+
     for (const key in this.schema) {
       const value = document[key];
       if (value === undefined || value === null) continue;
@@ -87,11 +100,22 @@ export class BuniSearch {
       const propSchema = this.schema[key];
       if (!propSchema) continue;
 
-      if (propSchema.type === "string") this._indexText(id, String(value));
-      if (propSchema.facetable) this._indexFacet(id, key, value);
-      if (propSchema.type === "number" && propSchema.sortable)
+      if (propSchema.type === "string") {
+        // _indexText will now return the number of tokens
+        docLength += this._indexText(id, String(value));
+      }
+      if (propSchema.facetable) {
+        this._indexFacet(id, key, value);
+      }
+      if (propSchema.type === "number" && propSchema.sortable) {
         this._indexNumeric(id, key, value);
+      }
     }
+
+    // Store the calculated length for this document
+    this.docLengths.set(id, docLength);
+    this.totalDocLength += docLength;
+
     return id;
   }
 
@@ -105,6 +129,12 @@ export class BuniSearch {
     if (!docToDelete) {
       return false; // Document not found
     }
+
+    // --- BM25 Change: Update document length tracking ---
+    const docLength = this.docLengths.get(docId) || 0;
+    this.totalDocLength -= docLength;
+    this.docLengths.delete(docId);
+    // --- End of BM25 Change ---
 
     // Un-index the document from all data structures
     this._unindexText(docId, docToDelete);
@@ -154,6 +184,8 @@ export class BuniSearch {
     const serializableState: SerializableState = {
       schema: this.schema,
       docCount: this.docCount,
+      totalDocLength: this.totalDocLength,
+      docLengths: Array.from(this.docLengths.entries()),
       // Convert Maps and Sets to JSON-compatible Arrays
       documents: Array.from(this.documents.entries()),
       invertedIndex: Array.from(this.invertedIndex.entries()).map(
@@ -189,6 +221,9 @@ export class BuniSearch {
 
     // 2. Hydrate the instance with the loaded data
     db.docCount = state.docCount;
+    db.totalDocLength = state.totalDocLength;
+    db.docLengths = new Map(state.docLengths);
+
     // Reconstruct Maps and Sets from the Arrays
     db.documents = new Map(state.documents);
     db.invertedIndex = new Map(
@@ -212,7 +247,7 @@ export class BuniSearch {
   // PRIVATE INDEXING METHODS (Correctly Implemented)
   // =================================================================
 
-  private _indexText(id: string, value: string) {
+  private _indexText(id: string, value: string): number {
     const tokens = tokenize(value);
     const termFrequencies: Record<string, number> = {};
     for (const token of tokens) {
@@ -224,6 +259,7 @@ export class BuniSearch {
         this.invertedIndex.set(token, new Map());
       this.invertedIndex.get(token)!.set(id, termFrequencies[token] || 0);
     }
+    return tokens.length;
   }
 
   private _indexFacet(id: string, key: string, value: any) {
@@ -330,6 +366,9 @@ export class BuniSearch {
 
     // STAGE 2: FULL-TEXT SEARCH
     const scores: Map<string, number> = new Map();
+    // --- BM25 Change: Calculate avgdl ---
+    const avgdl = this.docCount > 0 ? this.totalDocLength / this.docCount : 0;
+
     // If there's a search term, perform the search. Otherwise, all filtered docs are results.
     if (term) {
       const queryTokens = tokenize(term);
@@ -338,14 +377,29 @@ export class BuniSearch {
         for (const { token: indexToken, distance } of matchingTokens) {
           const postings = this.invertedIndex.get(indexToken);
           if (!postings) continue;
+
+          // Use the modern IDF formula (already correct)
           const idf = Math.log(
             1 + (this.docCount - postings.size + 0.5) / (postings.size + 0.5),
           );
+
           for (const [docId, tf] of postings.entries()) {
             if (allowedDocIds === null || allowedDocIds.has(docId)) {
+              const docLength = this.docLengths.get(docId);
+              // This should always be found for an indexed document, but as a safeguard:
+              if (docLength === undefined) continue;
+
+              // --- BM25 Calculation ---
+              const numerator = tf * (this.k1 + 1);
+              const denominator =
+                tf + this.k1 * (1 - this.b + this.b * (docLength / avgdl));
+              const bm25ScoreForTerm = idf * (numerator / denominator);
+              // --- End of BM25 Calculation ---
+
               const fuzzyPenalty =
                 distance > 0 ? 1 - distance / queryToken.length : 1;
-              const scoreIncrement = tf * idf * fuzzyPenalty;
+              const scoreIncrement = bm25ScoreForTerm * fuzzyPenalty;
+
               scores.set(docId, (scores.get(docId) || 0) + scoreIncrement);
             }
           }
