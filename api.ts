@@ -173,10 +173,13 @@ async function startApi(port: number = 3000) {
     (col) => {
       col.post(
         "/search",
-        (ctx) => {
+        async (ctx) => {
           const { collection } = ctx.state;
           const searchParams = ctx.body;
-          const results = collection.search(searchParams.q, searchParams);
+          const results = await collection.search(
+            searchParams.q,
+            searchParams,
+          );
 
           return ctx.json({
             ...results,

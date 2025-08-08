@@ -36,3 +36,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 *index.json
 *ndjson
 products-bestbuy.json
+
+# Rust build artifacts
+native/target
+native/Cargo.lock
