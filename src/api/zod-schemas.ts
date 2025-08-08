@@ -8,7 +8,7 @@ export const searchBodySchema = z.object({
     .min(0)
     .max(5)
     .optional()
-    .default(1)
+    .default(0)
     .describe("Levenshtein distance for fuzzy search."),
   limit: z
     .number()
