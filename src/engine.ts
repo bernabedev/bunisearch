@@ -679,10 +679,10 @@ export class BuniSearch {
     }
 
     if (tokens.length === 1) {
-      return tokenPositionsInDoc[0].length > 0;
+      return (tokenPositionsInDoc?.[0]?.length ?? 0) > 0;
     }
 
-    const firstTokenPositions = tokenPositionsInDoc[0];
+    const firstTokenPositions = tokenPositionsInDoc[0] ?? [];
     // For each possible start position of the phrase...
     for (const startPos of firstTokenPositions) {
       // ...check if the rest of the phrase follows consecutively.
