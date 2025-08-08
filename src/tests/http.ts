@@ -18,9 +18,10 @@ export const http = {
   },
 
   post(path: string, body: any, options?: RequestInit) {
+    const requestBody = body instanceof FormData ? body : JSON.stringify(body);
     return this.request(path, {
       method: "POST",
-      body: JSON.stringify(body),
+      body: requestBody,
       ...options,
     });
   },

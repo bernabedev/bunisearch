@@ -3,6 +3,10 @@ import { Bklar, type Middleware } from "bklar";
 import { BadRequestError, NotFoundError } from "bklar/errors";
 import { z } from "zod";
 import {
+  parseNDJSON,
+  processBulkDocuments,
+} from "./src/api/process-bulk-documents";
+import {
   addDocumentQuerySchema,
   searchBodySchema,
 } from "./src/api/zod-schemas";
@@ -27,6 +31,10 @@ async function startApi(port: number = 3000) {
   const manager = await initializeSearchEngine();
   const app = Bklar();
   const serverStartTime = Date.now();
+
+  app.onError((ctx, error) => {
+    console.log("Error", error);
+  });
 
   app.get(
     "/health",
@@ -292,6 +300,62 @@ async function startApi(port: number = 3000) {
             tags: ["Documents"],
             description:
               "Permanently deletes a single document from a collection by its ID.",
+          },
+        },
+      );
+
+      col.post(
+        "/docs/bulk",
+        async (ctx) => {
+          const { collection } = ctx.state;
+          const contentType = ctx.req.headers.get("Content-Type") || "";
+
+          let results;
+
+          if (contentType.includes("application/json")) {
+            const documents = ctx.body as unknown as any[];
+            if (!Array.isArray(documents)) {
+              throw new BadRequestError(
+                "Request body must be a JSON array of documents.",
+              );
+            }
+            results = await processBulkDocuments(collection, documents);
+          } else if (contentType.includes("multipart/form-data")) {
+            const formData = await ctx.req.formData();
+            const file = formData.get("file");
+
+            if (!file || typeof file === "string") {
+              throw new BadRequestError(
+                "A 'file' field with an NDJSON file is required for multipart/form-data requests.",
+              );
+            }
+            const documentsStream = parseNDJSON(file.stream());
+            results = await processBulkDocuments(collection, documentsStream);
+          } else {
+            throw new BadRequestError(
+              "Unsupported Content-Type. Use 'application/json' for body or 'multipart/form-data' for file upload.",
+            );
+          }
+
+          return ctx.json({ message: "Bulk operation completed.", ...results });
+        },
+        {
+          schemas: {
+            body: z.any(),
+          },
+          doc: {
+            summary: "Index multiple documents",
+            tags: ["Documents"],
+            description: `
+Indexes multiple documents in a single request for high performance.
+This endpoint supports two modes based on the Content-Type header:
+
+**1. JSON Body (\`application/json\`)**
+Send an array of document objects directly in the request body.
+
+**2. File Upload (\`multipart/form-data\`)**
+Upload a file containing Newline Delimited JSON (NDJSON), where each line is a separate JSON document object. The form field name must be \`file\`. This method is highly recommended for very large datasets as it's processed as a stream.
+`,
           },
         },
       );

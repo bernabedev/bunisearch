@@ -1,7 +1,8 @@
+import { unlink } from "node:fs/promises";
 import { http } from "./src/tests/http";
-
 const COLLECTION_NAME = "bestbuy-products";
-const PRODUCTS_FILE_PATH = "./data/products-bestbuy.json";
+const ORIGINAL_PRODUCTS_FILE = "./data/products-bestbuy.json";
+const CLEAN_PRODUCTS_FILE = "./products-bestbuy.clean.ndjson";
 
 /**
  * Checks if the BuniSearch API server is running.
@@ -53,76 +54,81 @@ async function ensureCollectionExists() {
 }
 
 /**
- * Reads the products file line by line and indexes each product.
+ * Pre-processes the original JSON file into a valid NDJSON file by removing
+ * trailing commas from each line.
+ * @returns The number of lines processed.
  */
-async function indexProducts() {
-  console.log(`\nIndexing products from "${PRODUCTS_FILE_PATH}"...`);
+async function createCleanNDJSONFile(): Promise<number> {
+  console.log(
+    `\n🧹 Pre-processing "${ORIGINAL_PRODUCTS_FILE}" into a clean NDJSON file...`,
+  );
 
-  const file = Bun.file(PRODUCTS_FILE_PATH);
-  const stream = file.stream();
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let indexedCount = 0;
+  const inputFile = Bun.file(ORIGINAL_PRODUCTS_FILE);
+  const content = await inputFile.text();
 
-  // This loop processes the file as a stream, which is memory-efficient
-  // for very large files.
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  let data: any;
+  try {
+    data = JSON.parse(content);
+  } catch (err) {
+    throw new Error(`❌ Failed to parse "${ORIGINAL_PRODUCTS_FILE}" as JSON.`);
+  }
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || ""; // Keep the last, possibly incomplete line
+  if (!Array.isArray(data)) {
+    throw new Error(`❌ Expected JSON array in "${ORIGINAL_PRODUCTS_FILE}".`);
+  }
 
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      if (trimmedLine === "") continue;
-      let cleanLine = trimmedLine;
-      if (cleanLine.endsWith(",")) {
-        cleanLine = cleanLine.slice(0, -1);
-      }
-      try {
-        const product = JSON.parse(cleanLine);
+  const writer = Bun.file(CLEAN_PRODUCTS_FILE).writer();
+  for (const obj of data) {
+    writer.write(JSON.stringify(obj) + "\n");
+  }
+  await writer.end();
 
-        // Transform the product data to match our schema
-        const docToIndex = {
-          name: product.name,
-          description: product.description,
-          manufacturer: product.manufacturer,
-          // Flatten the category array into a single string for searching
-          // and take the last category name for faceting.
-          category:
-            product.category.map((c: any) => c.name).pop() || "Uncategorized",
-          price: product.price,
-        };
+  console.log(
+    `✅ Created clean file "${CLEAN_PRODUCTS_FILE}" with ${data.length} products.`,
+  );
+  return data.length;
+}
 
-        // Use the original SKU as the document ID
-        const response = await http.post(
-          `/collections/${COLLECTION_NAME}/docs?id=${product.sku}`,
-          docToIndex,
-        );
-
-        if (response.ok) {
-          indexedCount++;
-          // Log progress every 1000 documents to avoid spamming the console
-          if (indexedCount % 1000 === 0) {
-            console.log(`... Indexed ${indexedCount} products`);
-          }
-        } else {
-          console.warn(
-            `⚠️ Failed to index product SKU ${product.sku}: ${await response.text()}`,
-          );
-        }
-      } catch (e) {
-        console.error(`❌ Could not parse line: ${line.substring(0, 100)}...`);
-      }
-    }
+/**
+ * Indexes all products by uploading the clean NDJSON file to the bulk endpoint.
+ */
+async function indexProductsInBulk() {
+  const lineCount = await createCleanNDJSONFile();
+  if (lineCount === 0) {
+    console.log("No products to index.");
+    return;
   }
 
   console.log(
-    `\n🎉 Indexing complete! Successfully indexed ${indexedCount} products.`,
+    `\n📤 Uploading "${CLEAN_PRODUCTS_FILE}" to the bulk indexing endpoint...`,
   );
+
+  // Create FormData and append the clean file
+  const formData = new FormData();
+  formData.append("file", Bun.file(CLEAN_PRODUCTS_FILE));
+
+  // Send the file using our updated http client
+  const response = await http.post(
+    `/collections/${COLLECTION_NAME}/docs/bulk`,
+    formData,
+    {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Bulk indexing failed: ${await response.text()}`);
+  }
+
+  const results = await response.json();
+  console.log("\n🎉 Bulk indexing complete!");
+  console.log(JSON.stringify(results, null, 2));
+
+  // Optional: Clean up the temporary file
+  await unlink(CLEAN_PRODUCTS_FILE);
+  console.log(`\n🗑️ Cleaned up temporary file.`);
 }
 
 /**
@@ -135,7 +141,7 @@ async function main() {
 
   try {
     await ensureCollectionExists();
-    await indexProducts();
+    await indexProductsInBulk();
   } catch (error) {
     console.error("\nAn unexpected error occurred during the demo script:");
     console.error(error);
