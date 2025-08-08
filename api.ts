@@ -181,7 +181,7 @@ async function startApi(port: number = 3000) {
             summary: "Search within a collection",
             tags: ["Documents"],
             description:
-              "Performs a full-featured search on the documents within a specific collection.",
+              "Performs a full-featured search on the documents within a specific collection. You can use the `fields` property to limit the returned document fields.",
           },
         },
       );

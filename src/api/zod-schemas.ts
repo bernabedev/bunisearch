@@ -29,6 +29,10 @@ export const searchBodySchema = z.object({
     .describe(
       'A JSON object for filtering results. e.g., `{"brand":"Essence","price":{"gte":50}}`',
     ),
+  fields: z
+    .array(z.string())
+    .optional()
+    .describe("A list of specific fields to return in the search results."),
 });
 
 export const addDocumentQuerySchema = z.object({

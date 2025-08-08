@@ -155,4 +155,24 @@ describe("Documents API", () => {
     // This should match both documents
     expect(termBody.count).toBe(2);
   });
+
+  test("POST /search - should return only specified fields", async () => {
+    await http.post(`/collections/${collectionName}/docs`, sampleDoc);
+
+    const searchPayload = { q: "laptop", fields: ["title", "price"] };
+    const searchRes = await http.post(
+      `/collections/${collectionName}/search`,
+      searchPayload,
+    );
+    expect(searchRes.status).toBe(200);
+    const body = (await searchRes.json()) as { hits: any[] };
+    const doc = body.hits[0].document;
+
+    expect(doc.title).toBe("Laptop Pro");
+    expect(doc.price).toBe(1200);
+    expect(doc.brand).toBeUndefined(); // 'brand' was not requested
+
+    // Ensure 'id' is always returned
+    expect(doc.id).toBeString();
+  });
 });

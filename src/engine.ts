@@ -23,6 +23,7 @@ type SearchOptions = {
   limit?: number;
   facets?: string[];
   filters?: Filters;
+  fields?: string[];
 };
 
 type SearchResultHit = { id: string; score: number; document: Document };
@@ -369,6 +370,7 @@ export class BuniSearch {
       limit = 10,
       facets: requestedFacets = [],
       filters = {},
+      fields,
     } = options;
 
     // STAGE 1: FILTERING
@@ -500,11 +502,27 @@ export class BuniSearch {
     // Format final response
     const hits: SearchResultHit[] = sortedDocs
       .slice(0, limit)
-      .map(([docId, score]) => ({
-        id: docId,
-        score,
-        document: this.documents.get(docId)!,
-      }));
+      .map(([docId, score]) => {
+        const fullDocument = this.documents.get(docId)!;
+        let document: Document;
+
+        if (fields && fields.length > 0) {
+          document = { id: docId }; // Always include the id
+          for (const field of fields) {
+            if (fullDocument.hasOwnProperty(field)) {
+              document[field] = fullDocument[field];
+            }
+          }
+        } else {
+          document = fullDocument;
+        }
+
+        return {
+          id: docId,
+          score,
+          document,
+        };
+      });
 
     const endTime = process.hrtime.bigint();
     const elapsedNs = endTime - startTime;
