@@ -32,10 +32,6 @@ async function startApi(port: number = 3000) {
   const app = Bklar();
   const serverStartTime = Date.now();
 
-  app.onError((ctx, error) => {
-    console.log("Error", error);
-  });
-
   app.get(
     "/health",
     (ctx) => {
