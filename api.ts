@@ -71,13 +71,7 @@ async function startApi(port: number = 3000) {
    * Middleware to automatically persist a collection's state to disk after a write operation.
    */
   const persistOnWrite: Middleware = async (ctx) => {
-    const url = new URL(ctx.req.url);
-    const pathname = url.pathname;
-
-    if (
-      ["POST", "PUT", "DELETE"].includes(ctx.req.method) &&
-      pathname !== "/collections/products/search"
-    ) {
+    if (["POST", "PUT", "DELETE"].includes(ctx.req.method)) {
       const collectionName = ctx.params.collectionName;
       if (collectionName) {
         console.log(
@@ -182,7 +176,10 @@ async function startApi(port: number = 3000) {
         async (ctx) => {
           const { collection } = ctx.state;
           const searchParams = ctx.body;
-          const results = await collection.search(searchParams.q, searchParams);
+          const results = await collection.search(
+            searchParams.q,
+            searchParams,
+          );
 
           return ctx.json({
             ...results,

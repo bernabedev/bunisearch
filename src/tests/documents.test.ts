@@ -107,8 +107,8 @@ describe("Documents API", () => {
       searchPayload,
     );
     expect(searchRes.status).toBe(200);
-    const body = (await searchRes.json()) as { count: number; hits: any[] };
-    expect(body.count).toBe(1);
+    const body = (await searchRes.json()) as { totalHits: number; hits: any[] };
+    expect(body.totalHits).toBe(1);
     expect(body.hits[0].document.title).toBe("Laptop Pro");
   });
 
@@ -133,10 +133,10 @@ describe("Documents API", () => {
     );
     expect(phraseSearchRes.status).toBe(200);
     const phraseBody = (await phraseSearchRes.json()) as {
-      count: number;
+      totalHits: number;
       hits: any[];
     };
-    expect(phraseBody.count).toBe(1);
+    expect(phraseBody.totalHits).toBe(1);
     expect(phraseBody.hits[0].document.title).toBe(
       "the quick brown fox jumps over the lazy dog",
     );
@@ -149,11 +149,11 @@ describe("Documents API", () => {
     );
     expect(termSearchRes.status).toBe(200);
     const termBody = (await termSearchRes.json()) as {
-      count: number;
+      totalHits: number;
       hits: any[];
     };
     // This should match both documents
-    expect(termBody.count).toBe(2);
+    expect(termBody.totalHits).toBe(2);
   });
 
   test("POST /search - should find documents with fuzzy search (tolerance)", async () => {
@@ -171,10 +171,51 @@ describe("Documents API", () => {
       searchPayload,
     );
     expect(searchRes.status).toBe(200);
-    const body = (await searchRes.json()) as { count: number; hits: any[] };
+    const body = (await searchRes.json()) as { totalHits: number; hits: any[] };
 
     // Should find the document containing "laptop"
-    expect(body.count).toBe(1);
+    expect(body.totalHits).toBe(1);
     expect(body.hits[0].document.title).toBe("The new Apple Laptop is great");
+  });
+
+  test("POST /search - should handle pagination and field selection", async () => {
+    // 1. Index 3 documents
+    await http.post(`/collections/${collectionName}/docs`, { title: "Doc 1", brand: "A", price: 10 });
+    await http.post(`/collections/${collectionName}/docs`, { title: "Doc 2", brand: "A", price: 20 });
+    await http.post(`/collections/${collectionName}/docs`, { title: "Doc 3", brand: "B", price: 30 });
+
+    // 2. Search with pagination and field selection
+    const searchPayload = {
+      q: "doc",
+      page: 2,
+      limit: 1,
+      fields: ["title", "price"],
+    };
+    const searchRes = await http.post(
+      `/collections/${collectionName}/search`,
+      searchPayload,
+    );
+    expect(searchRes.status).toBe(200);
+
+    const body = await searchRes.json() as any;
+
+    // Verify pagination metadata
+    expect(body.totalHits).toBe(3);
+    expect(body.page).toBe(2);
+    expect(body.limit).toBe(1);
+    expect(body.totalPages).toBe(3);
+
+    // Verify paginated results
+    expect(body.hits).toHaveLength(1);
+    // Assuming default sort by score might not be stable, we check for a possible title.
+    // A more robust test would sort by a specific field.
+    expect(body.hits[0].document.title).toContain("Doc");
+
+    // Verify field selection
+    const doc = body.hits[0].document;
+    expect(doc).toHaveProperty("id");
+    expect(doc).toHaveProperty("title");
+    expect(doc).toHaveProperty("price");
+    expect(doc).not.toHaveProperty("brand");
   });
 });

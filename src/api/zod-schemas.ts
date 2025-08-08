@@ -10,14 +10,25 @@ export const searchBodySchema = z.object({
     .optional()
     .default(1)
     .describe("Levenshtein distance for fuzzy search."),
-  limit: z
+  page: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .default(1)
+    .describe("The page number to retrieve (1-indexed)."),
+  limit: z.coerce
     .number()
     .int()
     .min(1)
     .max(100)
     .optional()
     .default(20)
-    .describe("Number of results to return."),
+    .describe("Number of results per page."),
+  fields: z
+    .array(z.string())
+    .optional()
+    .describe("An array of field names to return in the document."),
   facets: z
     .array(z.string())
     .optional()

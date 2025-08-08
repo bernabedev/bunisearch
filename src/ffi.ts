@@ -8,7 +8,7 @@ export type FuzzyResult = {
 let ffi: ReturnType<typeof setupFFI> | null = null;
 
 function setupFFI() {
-  const { dlopen, FFIType, suffix } = require("bun:ffi");
+  const { dlopen, FFIType, suffix } = require("bun");
   const libPath = `native/target/release/libbuni_native.${suffix}`;
 
   return dlopen(libPath, {
@@ -58,10 +58,7 @@ export const deleteWord = (word: string) => {
   getFFI().delete_word(wordBuffer);
 };
 
-export const searchFuzzy = (
-  word: string,
-  maxDistance: number,
-): FuzzyResult[] => {
+export const searchFuzzy = (word: string, maxDistance: number): FuzzyResult[] => {
   const ffiSymbols = getFFI();
   const wordBuffer = Buffer.from(word + "\0", "utf8");
   const resultPtr = ffiSymbols.search_fuzzy(wordBuffer, maxDistance);

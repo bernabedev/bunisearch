@@ -28,14 +28,19 @@ type Filters = Record<string, any | RangeFilter>;
 type SearchOptions = {
   tolerance?: number;
   limit?: number;
+  page?: number;
+  fields?: string[];
   facets?: string[];
   filters?: Filters;
 };
 
-type SearchResultHit = { id: string; score: number; document: Document };
+type SearchResultHit = { id:string; score: number; document: Document };
 type SearchResult = {
   hits: SearchResultHit[];
-  count: number;
+  totalHits: number;
+  page: number;
+  limit: number;
+  totalPages: number;
   facets?: Record<string, Record<string, number>>;
   elapsed: number;
 };
@@ -416,7 +421,9 @@ export class BuniSearch {
     const startTime = process.hrtime.bigint();
     const {
       tolerance = 0,
-      limit = 10,
+      limit = 20,
+      page = 1,
+      fields = [],
       facets: requestedFacets = [],
       filters = {},
     } = options;
@@ -429,7 +436,10 @@ export class BuniSearch {
       const elapsedMs = Number(elapsedNs / 1000000n);
       return {
         hits: [],
-        count: 0,
+        totalHits: 0,
+        page,
+        limit,
+        totalPages: 0,
         facets: {},
         elapsed: elapsedMs,
       };
@@ -567,21 +577,34 @@ export class BuniSearch {
       ([, a], [, b]) => b - a,
     );
 
-    // STAGE 3: FACETING
-    const searchResultDocIds = sortedDocs.map(([docId]) => docId);
-    const facetResults = this._calculateFacets(
-      searchResultDocIds,
-      requestedFacets,
-    );
+    const totalHits = sortedDocs.length;
+    const totalPages = Math.ceil(totalHits / limit);
 
-    // Format final response
-    const hits: SearchResultHit[] = sortedDocs
-      .slice(0, limit)
-      .map(([docId, score]) => ({
-        id: docId,
-        score,
-        document: this.documents.get(docId)!,
-      }));
+    // STAGE 3: FACETING (on all results before pagination)
+    const allResultDocIds = sortedDocs.map(([docId]) => docId);
+    const facetResults = this._calculateFacets(allResultDocIds, requestedFacets);
+
+    // STAGE 4: PAGINATION & FIELD SELECTION
+    const offset = (page - 1) * limit;
+    const paginatedDocs = sortedDocs.slice(offset, offset + limit);
+
+    const hits: SearchResultHit[] = paginatedDocs.map(([docId, score]) => {
+      const fullDocument = this.documents.get(docId)!;
+      let document: Document;
+
+      if (fields.length > 0) {
+        document = { id: docId }; // Always include ID
+        for (const field of fields) {
+          if (Object.prototype.hasOwnProperty.call(fullDocument, field)) {
+            document[field] = fullDocument[field];
+          }
+        }
+      } else {
+        document = fullDocument;
+      }
+
+      return { id: docId, score, document };
+    });
 
     const endTime = process.hrtime.bigint();
     const elapsedNs = endTime - startTime;
@@ -589,7 +612,10 @@ export class BuniSearch {
 
     return {
       hits,
-      count: sortedDocs.length,
+      totalHits,
+      page,
+      limit,
+      totalPages,
       facets: facetResults,
       elapsed: elapsedMs,
     };
