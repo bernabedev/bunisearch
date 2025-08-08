@@ -1,11 +1,11 @@
-import { tokenize } from "./utils/tokenizer";
 import {
+  deleteWord,
   initTrie,
   insertWord,
-  deleteWord,
   searchFuzzy,
   type FuzzyResult,
 } from "./ffi";
+import { tokenize } from "./utils/tokenizer";
 import { Trie as FallbackTrie } from "./utils/trie.fallback";
 
 // --- Type Definitions ---
@@ -34,7 +34,7 @@ type SearchOptions = {
   filters?: Filters;
 };
 
-type SearchResultHit = { id:string; score: number; document: Document };
+type SearchResultHit = { id: string; score: number; document: Document };
 type SearchResult = {
   hits: SearchResultHit[];
   totalHits: number;
@@ -468,7 +468,7 @@ export class BuniSearch {
           }))
           .sort((a, b) => a.size - b.size);
 
-        queryTokens = sortedTokens.map(t => t.token);
+        queryTokens = sortedTokens.map((t) => t.token);
 
         // 1. Find candidate documents (intersection of doc IDs for all tokens)
         let candidateDocIds: Set<string> | null = null;
@@ -489,9 +489,11 @@ export class BuniSearch {
                 ? [candidateDocIds, docIdsForToken]
                 : [docIdsForToken, candidateDocIds];
 
-            candidateDocIds = new Set([...smallerSet].filter(id => largerSet.has(id)));
+            candidateDocIds = new Set(
+              [...smallerSet].filter((id) => largerSet.has(id)),
+            );
           }
-           // If intersection results in zero candidates, we can stop early.
+          // If intersection results in zero candidates, we can stop early.
           if (candidateDocIds.size === 0) break;
         }
 
@@ -525,14 +527,35 @@ export class BuniSearch {
           }
         }
       } else {
-        // --- TERM SEARCH (REGULAR) ---
-        const queryTokens = tokenize(term);
+        // --- TERM SEARCH (SMART) ---
+        const initialTokens = tokenize(term);
+        const queryTokens: { token: string; isMerged: boolean }[] = [];
+
+        // Part 1: Shingling and Merging
+        for (let i = 0; i < initialTokens.length; i++) {
+          // Check for a potential 2-gram (shingle)
+          if (i < initialTokens.length - 1) {
+            const shingle = `${initialTokens[i]} ${initialTokens[i + 1]}`;
+            const mergedToken = shingle.replace(/\s/g, ""); // e.g., "mac book" -> "macbook"
+
+            // Check if the merged token exists in our dictionary
+            if (this.invertedIndex.has(mergedToken)) {
+              queryTokens.push({ token: mergedToken, isMerged: true });
+              i++; // Skip the next token since it has been merged
+              continue; // Move to the next iteration
+            }
+          }
+          // If no merge happened, add the current token as is.
+          queryTokens.push({ token: initialTokens[i], isMerged: false });
+        }
+
         let processedDocs = 0; // Counter for yielding
         for (const queryToken of queryTokens) {
           const matchingTokens = this._findMatchingTokens(
-            queryToken,
+            queryToken.token,
             tolerance,
           );
+
           for (const { token: indexToken, distance } of matchingTokens) {
             const postings = this.invertedIndex.get(indexToken);
             if (!postings) continue;
@@ -552,9 +575,15 @@ export class BuniSearch {
                   tf + this.k1 * (1 - this.b + this.b * (docLength / avgdl));
                 const bm25ScoreForTerm = idf * (numerator / denominator);
 
+                // Part 2: Dynamic Score Boosting
+                const MERGED_TOKEN_BOOST = 1.75;
+                const finalScore =
+                  bm25ScoreForTerm *
+                  (queryToken.isMerged ? MERGED_TOKEN_BOOST : 1.0);
+
                 const fuzzyPenalty =
-                  distance > 0 ? 1 - distance / queryToken.length : 1;
-                const scoreIncrement = bm25ScoreForTerm * fuzzyPenalty;
+                  distance > 0 ? 1 - distance / queryToken.token.length : 1;
+                const scoreIncrement = finalScore * fuzzyPenalty;
 
                 scores.set(docId, (scores.get(docId) || 0) + scoreIncrement);
 
@@ -582,7 +611,10 @@ export class BuniSearch {
 
     // STAGE 3: FACETING (on all results before pagination)
     const allResultDocIds = sortedDocs.map(([docId]) => docId);
-    const facetResults = this._calculateFacets(allResultDocIds, requestedFacets);
+    const facetResults = this._calculateFacets(
+      allResultDocIds,
+      requestedFacets,
+    );
 
     // STAGE 4: PAGINATION & FIELD SELECTION
     const offset = (page - 1) * limit;

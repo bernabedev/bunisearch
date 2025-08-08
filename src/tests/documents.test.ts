@@ -180,9 +180,21 @@ describe("Documents API", () => {
 
   test("POST /search - should handle pagination and field selection", async () => {
     // 1. Index 3 documents
-    await http.post(`/collections/${collectionName}/docs`, { title: "Doc 1", brand: "A", price: 10 });
-    await http.post(`/collections/${collectionName}/docs`, { title: "Doc 2", brand: "A", price: 20 });
-    await http.post(`/collections/${collectionName}/docs`, { title: "Doc 3", brand: "B", price: 30 });
+    await http.post(`/collections/${collectionName}/docs`, {
+      title: "Doc 1",
+      brand: "A",
+      price: 10,
+    });
+    await http.post(`/collections/${collectionName}/docs`, {
+      title: "Doc 2",
+      brand: "A",
+      price: 20,
+    });
+    await http.post(`/collections/${collectionName}/docs`, {
+      title: "Doc 3",
+      brand: "B",
+      price: 30,
+    });
 
     // 2. Search with pagination and field selection
     const searchPayload = {
@@ -197,7 +209,7 @@ describe("Documents API", () => {
     );
     expect(searchRes.status).toBe(200);
 
-    const body = await searchRes.json() as any;
+    const body = (await searchRes.json()) as any;
 
     // Verify pagination metadata
     expect(body.totalHits).toBe(3);
@@ -217,5 +229,43 @@ describe("Documents API", () => {
     expect(doc).toHaveProperty("title");
     expect(doc).toHaveProperty("price");
     expect(doc).not.toHaveProperty("brand");
+  });
+
+  test("POST /search - Smart Search should boost merged tokens", async () => {
+    // 1. Index two documents.
+    await http.post(`/collections/${collectionName}/docs`, {
+      title: "buy a new macbook", // This should be the top result
+      brand: "Apple",
+      price: 2500,
+    });
+    await http.post(`/collections/${collectionName}/docs`, {
+      title: "buy a mac book case", // This should have a lower score
+      brand: "Generic",
+      price: 20,
+    });
+
+    // 2. Perform a search for "buy mac book"
+    // The smart search should merge "mac" and "book" into "macbook", keep "buy",
+    // and boost the score for "macbook".
+    const searchPayload = { q: "buy mac book" };
+    const searchRes = await http.post(
+      `/collections/${collectionName}/search`,
+      searchPayload,
+    );
+    expect(searchRes.status).toBe(200);
+    const body = (await searchRes.json()) as { totalHits: number; hits: any[] };
+
+    // Should find both documents because both contain "buy".
+    // The logic will search for "buy" and "macbook".
+    // Doc 1 matches both. Doc 2 matches only "buy".
+    expect(body.totalHits).toBe(2);
+
+    // 3. Assert that the "macbook" document has a higher score
+    const hit1 = body.hits[0];
+    const hit2 = body.hits[1];
+
+    expect(hit1.document.title).toBe("buy a new macbook");
+    expect(hit2.document.title).toBe("buy a mac book case");
+    expect(hit1.score).toBeGreaterThan(hit2.score);
   });
 });
