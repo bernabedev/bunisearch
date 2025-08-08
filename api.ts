@@ -71,7 +71,7 @@ async function startApi(port: number = 3000) {
     const pathname = url.pathname;
     if (
       ["POST", "PUT", "DELETE"].includes(ctx.req.method) &&
-      pathname !== "/collections/products/search"
+      !pathname.includes("/search")
     ) {
       const collectionName = ctx.params.collectionName;
       if (collectionName) {
