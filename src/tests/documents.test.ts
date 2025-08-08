@@ -111,4 +111,48 @@ describe("Documents API", () => {
     expect(body.count).toBe(1);
     expect(body.hits[0].document.title).toBe("Laptop Pro");
   });
+
+  test("POST /search - should handle phrase and term search correctly", async () => {
+    // 1. Index two documents
+    await http.post(`/collections/${collectionName}/docs`, {
+      title: "the quick brown fox jumps over the lazy dog",
+      brand: "Test",
+      price: 100,
+    });
+    await http.post(`/collections/${collectionName}/docs`, {
+      title: "a brown quick fox also jumps",
+      brand: "Test",
+      price: 100,
+    });
+
+    // 2. Perform a phrase search for "quick brown"
+    const phraseSearchPayload = { q: '"quick brown"' };
+    const phraseSearchRes = await http.post(
+      `/collections/${collectionName}/search`,
+      phraseSearchPayload,
+    );
+    expect(phraseSearchRes.status).toBe(200);
+    const phraseBody = (await phraseSearchRes.json()) as {
+      count: number;
+      hits: any[];
+    };
+    expect(phraseBody.count).toBe(1);
+    expect(phraseBody.hits[0].document.title).toBe(
+      "the quick brown fox jumps over the lazy dog",
+    );
+
+    // 3. Perform a regular term search for "quick brown"
+    const termSearchPayload = { q: "quick brown" };
+    const termSearchRes = await http.post(
+      `/collections/${collectionName}/search`,
+      termSearchPayload,
+    );
+    expect(termSearchRes.status).toBe(200);
+    const termBody = (await termSearchRes.json()) as {
+      count: number;
+      hits: any[];
+    };
+    // This should match both documents
+    expect(termBody.count).toBe(2);
+  });
 });

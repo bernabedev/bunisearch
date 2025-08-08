@@ -11,7 +11,7 @@ type SchemaProperty = {
 };
 type Schema = Record<string, SchemaProperty>;
 
-type InvertedIndex = Map<string, Map<string, number>>;
+type InvertedIndex = Map<string, Map<string, number[]>>; // Stores token positions
 type FacetIndex = Map<string, Map<any, Set<string>>>;
 type NumericIndex = Map<string, Array<{ value: number; docId: string }>>;
 
@@ -37,7 +37,7 @@ type SerializableState = {
   schema: Schema;
   docCount: number;
   documents: [string, Document][];
-  invertedIndex: [string, [string, number][]][];
+  invertedIndex: [string, [string, number[]][]][];
   facetIndex: [string, [any, string[]][]][];
   numericIndex: [string, { value: number; docId: string }[]][];
   // BM25-specific state
@@ -91,7 +91,8 @@ export class BuniSearch {
     this.documents.set(id, document);
     this.docCount++;
 
-    let docLength = 0; // Initialize length for the current document
+    let docLength = 0; // This still correctly tracks the total number of tokens for BM25.
+    let tokenPositionOffset = 0; // The running position offset for phrase search.
 
     for (const key in this.schema) {
       const value = document[key];
@@ -101,8 +102,13 @@ export class BuniSearch {
       if (!propSchema) continue;
 
       if (propSchema.type === "string") {
-        // _indexText will now return the number of tokens
-        docLength += this._indexText(id, String(value));
+        const tokenCount = this._indexText(
+          id,
+          String(value),
+          tokenPositionOffset,
+        );
+        docLength += tokenCount;
+        tokenPositionOffset += tokenCount; // Increment the offset for the next field.
       }
       if (propSchema.facetable) {
         this._indexFacet(id, key, value);
@@ -112,7 +118,7 @@ export class BuniSearch {
       }
     }
 
-    // Store the calculated length for this document
+    // Store the calculated length for this document (for BM25)
     this.docLengths.set(id, docLength);
     this.totalDocLength += docLength;
 
@@ -247,18 +253,33 @@ export class BuniSearch {
   // PRIVATE INDEXING METHODS (Correctly Implemented)
   // =================================================================
 
-  private _indexText(id: string, value: string): number {
+  private _indexText(id: string, value: string, basePosition: number): number {
     const tokens = tokenize(value);
-    const termFrequencies: Record<string, number> = {};
-    for (const token of tokens) {
-      termFrequencies[token] = (termFrequencies[token] || 0) + 1;
+    // This map will store the token and its list of positions within this specific `value` string.
+    const tokenPositions: Map<string, number[]> = new Map();
+
+    tokens.forEach((token, index) => {
+      if (!tokenPositions.has(token)) {
+        tokenPositions.set(token, []);
+      }
+      // The position is the token's index in the current field's tokens, plus the base offset.
+      tokenPositions.get(token)!.push(basePosition + index);
+    });
+
+    // Now, merge these new positions with any existing positions for this document.
+    for (const [token, positions] of tokenPositions.entries()) {
+      if (!this.invertedIndex.has(token)) {
+        this.invertedIndex.set(token, new Map());
+      }
+      const postings = this.invertedIndex.get(token)!;
+
+      if (!postings.has(id)) {
+        postings.set(id, []);
+      }
+      // Append the new positions.
+      postings.get(id)!.push(...positions);
     }
 
-    for (const token in termFrequencies) {
-      if (!this.invertedIndex.has(token))
-        this.invertedIndex.set(token, new Map());
-      this.invertedIndex.get(token)!.set(id, termFrequencies[token] || 0);
-    }
     return tokens.length;
   }
 
@@ -366,61 +387,103 @@ export class BuniSearch {
 
     // STAGE 2: FULL-TEXT SEARCH
     const scores: Map<string, number> = new Map();
-    // --- BM25 Change: Calculate avgdl ---
     const avgdl = this.docCount > 0 ? this.totalDocLength / this.docCount : 0;
+    const isPhraseSearch =
+      term.length > 2 && term.startsWith('"') && term.endsWith('"');
 
-    // If there's a search term, perform the search. Otherwise, all filtered docs are results.
     if (term) {
-      const queryTokens = tokenize(term);
-      for (const queryToken of queryTokens) {
-        const matchingTokens = this._findMatchingTokens(queryToken, tolerance);
-        for (const { token: indexToken, distance } of matchingTokens) {
-          const postings = this.invertedIndex.get(indexToken);
-          if (!postings) continue;
+      if (isPhraseSearch) {
+        // --- PHRASE SEARCH ---
+        const phrase = term.slice(1, -1);
+        const queryTokens = tokenize(phrase);
+        if (queryTokens.length === 0) {
+          return { hits: [], count: 0, elapsed: 0 };
+        }
 
-          // Use the modern IDF formula (already correct)
-          const idf = Math.log(
-            1 + (this.docCount - postings.size + 0.5) / (postings.size + 0.5),
-          );
+        // 1. Find candidate documents (intersection of doc IDs for all tokens)
+        let candidateDocIds: Set<string> | null = null;
+        for (const token of queryTokens) {
+          const postings = this.invertedIndex.get(token);
+          if (!postings) {
+            candidateDocIds = new Set();
+            break;
+          }
+          const docIdsForToken = new Set(postings.keys());
+          if (candidateDocIds === null) {
+            candidateDocIds = docIdsForToken;
+          } else {
+            candidateDocIds = new Set(
+              [...candidateDocIds].filter((id) => docIdsForToken.has(id)),
+            );
+          }
+        }
 
-          for (const [docId, tf] of postings.entries()) {
-            if (allowedDocIds === null || allowedDocIds.has(docId)) {
-              const docLength = this.docLengths.get(docId);
-              // This should always be found for an indexed document, but as a safeguard:
-              if (docLength === undefined) continue;
-
-              // --- BM25 Calculation ---
+        // 2. For each candidate, verify proximity and score
+        for (const docId of candidateDocIds || []) {
+          if (
+            (allowedDocIds === null || allowedDocIds.has(docId)) &&
+            this._verifyPhraseProximity(docId, queryTokens)
+          ) {
+            let docScore = 0;
+            const docLength = this.docLengths.get(docId)!;
+            for (const token of queryTokens) {
+              const postings = this.invertedIndex.get(token)!;
+              const positions = postings.get(docId)!;
+              const tf = positions.length;
+              const idf = Math.log(
+                1 +
+                  (this.docCount - postings.size + 0.5) / (postings.size + 0.5),
+              );
               const numerator = tf * (this.k1 + 1);
               const denominator =
                 tf + this.k1 * (1 - this.b + this.b * (docLength / avgdl));
-              const bm25ScoreForTerm = idf * (numerator / denominator);
-              // --- End of BM25 Calculation ---
+              docScore += idf * (numerator / denominator);
+            }
+            scores.set(docId, docScore * 1.5); // Add a 50% bonus for phrase match
+          }
+        }
+      } else {
+        // --- TERM SEARCH (REGULAR) ---
+        const queryTokens = tokenize(term);
+        for (const queryToken of queryTokens) {
+          const matchingTokens = this._findMatchingTokens(
+            queryToken,
+            tolerance,
+          );
+          for (const { token: indexToken, distance } of matchingTokens) {
+            const postings = this.invertedIndex.get(indexToken);
+            if (!postings) continue;
 
-              const fuzzyPenalty =
-                distance > 0 ? 1 - distance / queryToken.length : 1;
-              const scoreIncrement = bm25ScoreForTerm * fuzzyPenalty;
+            const idf = Math.log(
+              1 +
+                (this.docCount - postings.size + 0.5) / (postings.size + 0.5),
+            );
 
-              scores.set(docId, (scores.get(docId) || 0) + scoreIncrement);
+            for (const [docId, positions] of postings.entries()) {
+              if (allowedDocIds === null || allowedDocIds.has(docId)) {
+                const docLength = this.docLengths.get(docId);
+                if (docLength === undefined) continue;
+
+                const tf = positions.length; // Use position count as term frequency
+                const numerator = tf * (this.k1 + 1);
+                const denominator =
+                  tf + this.k1 * (1 - this.b + this.b * (docLength / avgdl));
+                const bm25ScoreForTerm = idf * (numerator / denominator);
+
+                const fuzzyPenalty =
+                  distance > 0 ? 1 - distance / queryToken.length : 1;
+                const scoreIncrement = bm25ScoreForTerm * fuzzyPenalty;
+
+                scores.set(docId, (scores.get(docId) || 0) + scoreIncrement);
+              }
             }
           }
         }
       }
     } else if (allowedDocIds) {
-      // No search term, but filters were applied. All filtered documents get a default score.
       for (const docId of allowedDocIds) {
         scores.set(docId, 1.0);
       }
-    } else {
-      // No search term and no filters. This case could return all documents, but let's return none.
-      // A real-world app might have a different requirement here.
-      const endTime = process.hrtime.bigint();
-      const elapsedNs = endTime - startTime;
-      const elapsedMs = Number(elapsedNs / 1000000n);
-      return {
-        hits: [],
-        count: 0,
-        elapsed: elapsedMs,
-      };
     }
 
     const sortedDocs = Array.from(scores.entries()).sort(
@@ -552,5 +615,73 @@ export class BuniSearch {
       }
     }
     return results;
+  }
+
+  private _findConsecutive(
+    targetPosition: number,
+    tokenIndex: number,
+    allPositions: readonly number[][],
+  ): boolean {
+    if (tokenIndex >= allPositions.length) {
+      return true; // Successfully found a consecutive path for all tokens.
+    }
+
+    const currentTokenPositions = allPositions[tokenIndex];
+    // Binary search for targetPosition in the sorted currentTokenPositions array.
+    let low = 0;
+    let high = currentTokenPositions.length - 1;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const midVal = currentTokenPositions[mid];
+      if (midVal === targetPosition) {
+        // Found the next token in the sequence, recurse to find the rest.
+        return this._findConsecutive(
+          targetPosition + 1,
+          tokenIndex + 1,
+          allPositions,
+        );
+      }
+      if (midVal < targetPosition) {
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    // The target position was not found in the current token's positions.
+    return false;
+  }
+
+  private _verifyPhraseProximity(
+    docId: string,
+    tokens: readonly string[],
+  ): boolean {
+    if (tokens.length === 0) {
+      return false;
+    }
+
+    const tokenPositionsInDoc: number[][] = [];
+    for (const token of tokens) {
+      const postings = this.invertedIndex.get(token);
+      if (!postings || !postings.has(docId)) {
+        return false; // This document doesn't contain all tokens.
+      }
+      tokenPositionsInDoc.push(postings.get(docId)!);
+    }
+
+    if (tokens.length === 1) {
+      return tokenPositionsInDoc[0].length > 0;
+    }
+
+    const firstTokenPositions = tokenPositionsInDoc[0];
+    // For each possible start position of the phrase...
+    for (const startPos of firstTokenPositions) {
+      // ...check if the rest of the phrase follows consecutively.
+      if (this._findConsecutive(startPos + 1, 1, tokenPositionsInDoc)) {
+        return true; // Found a valid phrase match.
+      }
+    }
+
+    return false; // No sequence matched.
   }
 }
