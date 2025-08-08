@@ -1,5 +1,12 @@
 import { tokenize } from "./utils/tokenizer";
-import { Trie } from "./utils/trie";
+import {
+  initTrie,
+  insertWord,
+  deleteWord,
+  searchFuzzy,
+  type FuzzyResult,
+} from "./ffi";
+import { Trie as FallbackTrie } from "./utils/trie.fallback";
 
 // --- Type Definitions ---
 type Document = Record<string, any> & { id: string };
@@ -21,14 +28,19 @@ type Filters = Record<string, any | RangeFilter>;
 type SearchOptions = {
   tolerance?: number;
   limit?: number;
+  page?: number;
+  fields?: string[];
   facets?: string[];
   filters?: Filters;
 };
 
-type SearchResultHit = { id: string; score: number; document: Document };
+type SearchResultHit = { id:string; score: number; document: Document };
 type SearchResult = {
   hits: SearchResultHit[];
-  count: number;
+  totalHits: number;
+  page: number;
+  limit: number;
+  totalPages: number;
   facets?: Record<string, Record<string, number>>;
   elapsed: number;
 };
@@ -49,10 +61,16 @@ export class BuniSearch {
   private schema: Schema;
   private documents: Map<string, Document> = new Map();
   private invertedIndex: InvertedIndex = new Map();
-  private vocabularyTrie: Trie = new Trie();
   private facetIndex: FacetIndex = new Map();
   private numericIndex: NumericIndex = new Map();
   public docCount = 0;
+
+  // --- Trie Strategy ---
+  // We use a feature flag to switch between the native (Rust) and fallback (TS) Trie.
+  // This is primarily to ensure that tests can run reliably in an environment where
+  // Bun's FFI features might not be fully available.
+  private useNativeTrie: boolean;
+  private vocabularyTrie: FallbackTrie | null = null;
 
   // BM25 parameters
   private k1 = 1.5;
@@ -64,6 +82,14 @@ export class BuniSearch {
 
   constructor({ schema }: { schema: Schema }) {
     this.schema = schema;
+    this.useNativeTrie = process.env.BUNI_USE_FFI === "true";
+
+    if (this.useNativeTrie) {
+      initTrie(); // Initialize the native Trie
+    } else {
+      this.vocabularyTrie = new FallbackTrie(); // Initialize the fallback Trie
+    }
+
     for (const key in schema) {
       if (!schema[key]) continue;
 
@@ -248,8 +274,16 @@ export class BuniSearch {
     db.numericIndex = new Map(state.numericIndex);
 
     // --- Trie Change: Rebuild the vocabulary trie from the loaded index ---
-    for (const token of db.invertedIndex.keys()) {
-      db.vocabularyTrie.insert(token);
+    if (db.useNativeTrie) {
+      initTrie(); // Reset the native trie before loading
+      for (const token of db.invertedIndex.keys()) {
+        insertWord(token); // Use FFI to rebuild the native Trie
+      }
+    } else {
+      db.vocabularyTrie = new FallbackTrie(); // Reset the fallback trie
+      for (const token of db.invertedIndex.keys()) {
+        db.vocabularyTrie.insert(token); // Rebuild the fallback trie
+      }
     }
     // --- End of Trie Change ---
 
@@ -277,7 +311,11 @@ export class BuniSearch {
     for (const [token, positions] of tokenPositions.entries()) {
       if (!this.invertedIndex.has(token)) {
         this.invertedIndex.set(token, new Map());
-        this.vocabularyTrie.insert(token);
+        if (this.useNativeTrie) {
+          insertWord(token);
+        } else {
+          this.vocabularyTrie?.insert(token);
+        }
       }
       const postings = this.invertedIndex.get(token)!;
 
@@ -315,7 +353,11 @@ export class BuniSearch {
             postings.delete(docId);
             // Clean up: if no documents are associated with this token, remove the token itself
             if (postings.size === 0) {
-              this.vocabularyTrie.delete(token);
+              if (this.useNativeTrie) {
+                deleteWord(token);
+              } else {
+                this.vocabularyTrie?.delete(token);
+              }
               this.invertedIndex.delete(token);
             }
           }
@@ -372,11 +414,16 @@ export class BuniSearch {
   // PUBLIC SEARCH METHOD & PRIVATE HELPERS
   // =================================================================
 
-  public search(term: string, options: SearchOptions = {}): SearchResult {
+  public async search(
+    term: string,
+    options: SearchOptions = {},
+  ): Promise<SearchResult> {
     const startTime = process.hrtime.bigint();
     const {
       tolerance = 0,
-      limit = 10,
+      limit = 20,
+      page = 1,
+      fields = [],
       facets: requestedFacets = [],
       filters = {},
     } = options;
@@ -389,7 +436,10 @@ export class BuniSearch {
       const elapsedMs = Number(elapsedNs / 1000000n);
       return {
         hits: [],
-        count: 0,
+        totalHits: 0,
+        page,
+        limit,
+        totalPages: 0,
         facets: {},
         elapsed: elapsedMs,
       };
@@ -405,15 +455,26 @@ export class BuniSearch {
       if (isPhraseSearch) {
         // --- PHRASE SEARCH ---
         const phrase = term.slice(1, -1);
-        const queryTokens = tokenize(phrase);
+        let queryTokens = tokenize(phrase);
         if (queryTokens.length === 0) {
           return { hits: [], count: 0, elapsed: 0 };
         }
+
+        // OPTIMIZATION: Sort tokens by rarity (smallest doc set first) to make intersection faster.
+        const sortedTokens = queryTokens
+          .map((token) => ({
+            token,
+            size: this.invertedIndex.get(token)?.size || 0,
+          }))
+          .sort((a, b) => a.size - b.size);
+
+        queryTokens = sortedTokens.map(t => t.token);
 
         // 1. Find candidate documents (intersection of doc IDs for all tokens)
         let candidateDocIds: Set<string> | null = null;
         for (const token of queryTokens) {
           const postings = this.invertedIndex.get(token);
+          // If a token doesn't exist, the phrase can't possibly match.
           if (!postings) {
             candidateDocIds = new Set();
             break;
@@ -422,15 +483,20 @@ export class BuniSearch {
           if (candidateDocIds === null) {
             candidateDocIds = docIdsForToken;
           } else {
-            candidateDocIds = new Set(
-              [...candidateDocIds].filter((id: string) =>
-                docIdsForToken.has(id),
-              ),
-            );
+            // Efficiently intersect the smaller set with the larger one.
+            const [smallerSet, largerSet] =
+              candidateDocIds.size < docIdsForToken.size
+                ? [candidateDocIds, docIdsForToken]
+                : [docIdsForToken, candidateDocIds];
+
+            candidateDocIds = new Set([...smallerSet].filter(id => largerSet.has(id)));
           }
+           // If intersection results in zero candidates, we can stop early.
+          if (candidateDocIds.size === 0) break;
         }
 
         // 2. For each candidate, verify proximity and score
+        let processedDocs = 0;
         for (const docId of candidateDocIds || []) {
           if (
             (allowedDocIds === null || allowedDocIds.has(docId)) &&
@@ -453,10 +519,15 @@ export class BuniSearch {
             }
             scores.set(docId, docScore * 1.5); // Add a 50% bonus for phrase match
           }
+          processedDocs++;
+          if (processedDocs % 1000 === 0) {
+            await Bun.sleep(0); // Yield to the event loop
+          }
         }
       } else {
         // --- TERM SEARCH (REGULAR) ---
         const queryTokens = tokenize(term);
+        let processedDocs = 0; // Counter for yielding
         for (const queryToken of queryTokens) {
           const matchingTokens = this._findMatchingTokens(
             queryToken,
@@ -486,6 +557,11 @@ export class BuniSearch {
                 const scoreIncrement = bm25ScoreForTerm * fuzzyPenalty;
 
                 scores.set(docId, (scores.get(docId) || 0) + scoreIncrement);
+
+                processedDocs++;
+                if (processedDocs % 1000 === 0) {
+                  await Bun.sleep(0); // Yield to the event loop
+                }
               }
             }
           }
@@ -501,21 +577,34 @@ export class BuniSearch {
       ([, a], [, b]) => b - a,
     );
 
-    // STAGE 3: FACETING
-    const searchResultDocIds = sortedDocs.map(([docId]) => docId);
-    const facetResults = this._calculateFacets(
-      searchResultDocIds,
-      requestedFacets,
-    );
+    const totalHits = sortedDocs.length;
+    const totalPages = Math.ceil(totalHits / limit);
 
-    // Format final response
-    const hits: SearchResultHit[] = sortedDocs
-      .slice(0, limit)
-      .map(([docId, score]) => ({
-        id: docId,
-        score,
-        document: this.documents.get(docId)!,
-      }));
+    // STAGE 3: FACETING (on all results before pagination)
+    const allResultDocIds = sortedDocs.map(([docId]) => docId);
+    const facetResults = this._calculateFacets(allResultDocIds, requestedFacets);
+
+    // STAGE 4: PAGINATION & FIELD SELECTION
+    const offset = (page - 1) * limit;
+    const paginatedDocs = sortedDocs.slice(offset, offset + limit);
+
+    const hits: SearchResultHit[] = paginatedDocs.map(([docId, score]) => {
+      const fullDocument = this.documents.get(docId)!;
+      let document: Document;
+
+      if (fields.length > 0) {
+        document = { id: docId }; // Always include ID
+        for (const field of fields) {
+          if (Object.prototype.hasOwnProperty.call(fullDocument, field)) {
+            document[field] = fullDocument[field];
+          }
+        }
+      } else {
+        document = fullDocument;
+      }
+
+      return { id: docId, score, document };
+    });
 
     const endTime = process.hrtime.bigint();
     const elapsedNs = endTime - startTime;
@@ -523,7 +612,10 @@ export class BuniSearch {
 
     return {
       hits,
-      count: sortedDocs.length,
+      totalHits,
+      page,
+      limit,
+      totalPages,
       facets: facetResults,
       elapsed: elapsedMs,
     };
@@ -587,15 +679,19 @@ export class BuniSearch {
   private _findMatchingTokens(
     queryToken: string,
     tolerance: number,
-  ): { token: string; distance: number }[] {
+  ): FuzzyResult[] {
     // First, check for an exact match, which is the most common and fastest case.
     if (this.invertedIndex.has(queryToken)) {
       return [{ token: queryToken, distance: 0 }];
     }
 
-    // If no exact match and tolerance is specified, use the Trie for fuzzy search.
+    // If no exact match and tolerance is specified, use the appropriate fuzzy search.
     if (tolerance > 0) {
-      return this.vocabularyTrie.searchFuzzy(queryToken, tolerance);
+      if (this.useNativeTrie) {
+        return searchFuzzy(queryToken, tolerance);
+      } else {
+        return this.vocabularyTrie?.searchFuzzy(queryToken, tolerance) || [];
+      }
     }
 
     // If no exact match and no tolerance, return no matches.

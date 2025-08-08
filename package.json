@@ -11,7 +11,11 @@
   "scripts": {
     "dev": "bun --watch api.ts",
     "start": "bun run api.ts",
-    "lint": "bunx oxlint"
+    "dev:ffi": "BUNI_USE_FFI=true bun --watch api.ts",
+    "start:ffi": "BUNI_USE_FFI=true bun run api.ts",
+    "lint": "bunx oxlint",
+    "build:native": "cd native && cargo build --release",
+    "test": "bun test"
   },
   "keywords": [
     "bun",
